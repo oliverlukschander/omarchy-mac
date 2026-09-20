@@ -5,8 +5,10 @@
 # omarchy:examples=omarchy brightness keyboard auto --once | omarchy brightness keyboard auto --map-lux 12
 
 # Inverse of display auto-brightness: dark rooms need the keys lit, bright
-# rooms do not. Manual Shift+F1/F2 (or any other write to the LED) pauses
-# auto until ambient light moves enough that the old choice no longer fits.
+# rooms do not. Manual Shift+F1/F2 to a visible level pauses auto until
+# ambient light moves enough that the old choice no longer fits. A write that
+# leaves the LED effectively off (lock-screen blank, systemd-backlight
+# restore, a 1% leftover) is not a manual override: resume and apply ALS.
 
 set -euo pipefail
 
@@ -16,6 +18,8 @@ BRIGHT_LUX=180
 DEADBAND_PERCENT=4
 OVERRIDE_LUX_DELTA=20
 OVERRIDE_LUX_RATIO=40
+# 2/255 is 1% and invisible; treat that band as off rather than a user choice.
+EFFECTIVELY_OFF_PERCENT=2
 
 once=0
 available_only=0
@@ -180,6 +184,11 @@ apply_percent() {
   last_set=$(brightnessctl -d "$device" get || echo "$target")
 }
 
+led_effectively_off() {
+  local current=$1
+  (( current * 100 <= max * EFFECTIVELY_OFF_PERCENT ))
+}
+
 tick() {
   local lux current delta threshold
 
@@ -192,23 +201,31 @@ tick() {
   current=$(brightnessctl -d "$device" get) || return 0
 
   if [[ -n $last_set && $current != "$last_set" ]]; then
-    paused=1
-    pause_lux=$lux
-    last_set=$current
-    return 0
+    if led_effectively_off "$current"; then
+      last_set=$current
+    else
+      paused=1
+      pause_lux=$lux
+      last_set=$current
+      return 0
+    fi
   fi
 
   if (( paused )); then
-    delta=$(( lux - pause_lux ))
-    (( delta < 0 )) && delta=$(( -delta ))
-    threshold=$OVERRIDE_LUX_DELTA
-    if (( pause_lux * OVERRIDE_LUX_RATIO / 100 > threshold )); then
-      threshold=$(( pause_lux * OVERRIDE_LUX_RATIO / 100 ))
+    if led_effectively_off "$current"; then
+      paused=0
+    else
+      delta=$(( lux - pause_lux ))
+      (( delta < 0 )) && delta=$(( -delta ))
+      threshold=$OVERRIDE_LUX_DELTA
+      if (( pause_lux * OVERRIDE_LUX_RATIO / 100 > threshold )); then
+        threshold=$(( pause_lux * OVERRIDE_LUX_RATIO / 100 ))
+      fi
+      if (( delta < threshold )); then
+        return 0
+      fi
+      paused=0
     fi
-    if (( delta < threshold )); then
-      return 0
-    fi
-    paused=0
   fi
 
   apply_percent "$(lux_to_percent "$lux")"

@@ -96,3 +96,127 @@ grep -F '/usr/lib/systemd/user/omarchy-brightness-keyboard-auto.service' "$migra
 grep -e 'cp .*omarchy-brightness-keyboard-auto.service' "$migration" >/dev/null &&
   fail "migration copies the unit into ~/.config/systemd/user"
 pass "migration enables ambient keyboard backlight for existing installs"
+
+grep -F 'EFFECTIVELY_OFF_PERCENT=2' "$auto" >/dev/null ||
+  fail "ALS keyboard helper no longer treats a 1% leftover as off"
+pass "ALS keyboard helper treats a 1% leftover as off"
+
+grep -F 'If something else turns the keys fully off' "$manual" >/dev/null ||
+  fail "manual does not describe recovery from a fully-off leftover"
+pass "manual describes recovery from lock-blank and 0% restore"
+
+tick_tmp=$(mktemp -d)
+trap 'rm -rf "$fake" "$leds" "$tick_tmp"' EXIT
+
+extract_fn() {
+  sed -n "/^$1()/,/^}/p" "$auto"
+}
+
+DARK_LUX=8
+BRIGHT_LUX=180
+DEADBAND_PERCENT=4
+OVERRIDE_LUX_DELTA=20
+OVERRIDE_LUX_RATIO=40
+EFFECTIVELY_OFF_PERCENT=2
+
+eval "$(extract_fn lux_to_percent)"
+eval "$(extract_fn led_effectively_off)"
+eval "$(extract_fn read_lux)"
+eval "$(extract_fn session_locked)"
+eval "$(extract_fn lid_closed)"
+eval "$(extract_fn apply_percent)"
+eval "$(extract_fn tick)"
+
+max=255
+led_effectively_off 0 || fail "0 is effectively off"
+led_effectively_off 2 || fail "2/255 (1%) is effectively off"
+led_effectively_off 5 || fail "5/255 (2%) is effectively off"
+if led_effectively_off 6; then
+  fail "6/255 is above the 2% leftover band"
+fi
+pass "a 1% leftover is treated as off, a visible 3% is not"
+
+iio="$tick_tmp/iio"
+stub="$tick_tmp/bin"
+kbd="$tick_tmp/leds"
+mkdir -p "$iio/iio:device1" "$kbd/kbd_backlight" "$stub"
+printf 'aop-sensors-als\n' >"$iio/iio:device1/name"
+printf '26\n' >"$iio/iio:device1/in_illuminance_input"
+printf '255\n' >"$kbd/kbd_backlight/max_brightness"
+printf '2\n' >"$kbd/kbd_backlight/brightness"
+
+cat >"$stub/brightnessctl" <<'SH'
+#!/bin/bash
+device=""
+while (($#)); do
+  case "$1" in
+    -d)
+      device=$2
+      shift 2
+      ;;
+    get)
+      cat "$OMARCHY_LEDS_DIR/$device/brightness"
+      exit 0
+      ;;
+    set)
+      printf '%s\n' "$2" >"$OMARCHY_LEDS_DIR/$device/brightness"
+      exit 0
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+exit 1
+SH
+
+cat >"$stub/omarchy-hyprland-session-locked" <<'SH'
+#!/bin/bash
+exit "${SESSION_LOCKED:-1}"
+SH
+
+cat >"$stub/omarchy-hw-laptop-closed" <<'SH'
+#!/bin/bash
+exit "${LID_CLOSED:-1}"
+SH
+
+chmod +x "$stub"/*
+
+als_path="$iio/iio:device1/in_illuminance_input"
+kbd_path="$kbd/kbd_backlight"
+device=kbd_backlight
+max=255
+export OMARCHY_LEDS_DIR=$kbd
+export PATH="$stub:$PATH"
+
+last_set=2
+paused=1
+pause_lux=26
+tick
+got=$(<"$kbd/kbd_backlight/brightness")
+[[ $got == 226 ]] || fail "paused 1% leftover in a dark room is re-applied from ALS" "got $got"
+(( paused == 0 )) || fail "recovering from an off leftover clears the pause"
+pass "a paused 1% leftover in a dark room is restored from ALS"
+
+printf '226\n' >"$kbd/kbd_backlight/brightness"
+last_set=226
+paused=0
+pause_lux=0
+printf '128\n' >"$kbd/kbd_backlight/brightness"
+tick
+got=$(<"$kbd/kbd_backlight/brightness")
+[[ $got == 128 ]] || fail "a visible manual level still pauses auto" "got $got"
+(( paused == 1 )) || fail "a visible manual level should set paused"
+tick
+got=$(<"$kbd/kbd_backlight/brightness")
+[[ $got == 128 ]] || fail "paused manual level is kept while lux is stable" "got $got"
+pass "Shift+F1/F2 to a visible level still pauses automatic control"
+
+printf '2\n' >"$kbd/kbd_backlight/brightness"
+last_set=2
+paused=1
+pause_lux=26
+SESSION_LOCKED=0 tick
+got=$(<"$kbd/kbd_backlight/brightness")
+[[ $got == 2 ]] || fail "lock still pauses automatic control" "got $got"
+pass "lock still skips ALS while the session is locked"
