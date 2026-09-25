@@ -13,7 +13,7 @@ direction="${1:-up}"
 
 # Find keyboard backlight device (look for *kbd_backlight* pattern in leds class).
 device=""
-for candidate in /sys/class/leds/*kbd_backlight*; do
+for candidate in "${OMARCHY_LEDS_DIR:-/sys/class/leds}"/*kbd_backlight*; do
   if [[ -e $candidate ]]; then
     device="$(basename "$candidate")"
     break
@@ -25,11 +25,24 @@ if [[ -z $device ]]; then
   exit 1
 fi
 
+# Blank and restore come in pairs: a blank saves the lit level once, and a
+# restore puts it back only after a blank. Every unlock and wake runs a
+# restore, and brightnessctl keeps its save, so an unpaired one would bring
+# back whatever an old blank saved.
+blanked="${XDG_RUNTIME_DIR:-/tmp}/omarchy-brightness-keyboard-blanked"
+
 if [[ $direction == "off" ]]; then
-  brightnessctl -sd "$device" set 0 >/dev/null
+  if [[ -e $blanked ]]; then
+    brightnessctl -d "$device" set 0 >/dev/null
+  else
+    brightnessctl -sd "$device" set 0 >/dev/null && touch "$blanked"
+  fi
   exit 0
 elif [[ $direction == "restore" ]]; then
-  brightnessctl -rd "$device" >/dev/null
+  if [[ -e $blanked ]]; then
+    brightnessctl -rd "$device" >/dev/null
+    rm -f "$blanked"
+  fi
   exit 0
 fi
 
