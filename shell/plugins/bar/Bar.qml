@@ -2040,6 +2040,11 @@ Item {
         ? root : root.pluginBarApiFor(pluginApiId, moduleName, registered)
       if ("moduleName" in target) target.moduleName = moduleName
       if ("settings" in target) target.settings = moduleSettings
+      // This bar is mounted once per connected screen (see the Variants
+      // over Quickshell.screens below), so a module needs to know which
+      // one it's on to avoid mounting a screen-global resource (like an
+      // IpcHandler) once per screen. See Util.isPrimaryScreen().
+      if ("screen" in target) target.screen = barWindow.screen
     }
 
     Component {
