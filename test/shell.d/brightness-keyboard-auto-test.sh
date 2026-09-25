@@ -97,77 +97,59 @@ grep -e 'cp .*omarchy-brightness-keyboard-auto.service' "$migration" >/dev/null 
   fail "migration copies the unit into ~/.config/systemd/user"
 pass "migration enables ambient keyboard backlight for existing installs"
 
-grep -F 'EFFECTIVELY_OFF_PERCENT=2' "$auto" >/dev/null ||
-  fail "ALS keyboard helper no longer treats a 1% leftover as off"
-pass "ALS keyboard helper treats a 1% leftover as off"
-
-grep -F 'If something else turns the keys fully off' "$manual" >/dev/null ||
-  fail "manual does not describe recovery from a fully-off leftover"
-pass "manual describes recovery from lock-blank and 0% restore"
-
+# Drive the daemon's real decision logic one poll at a time: its tunables and
+# tick path are loaded here, and every LED write goes through the real
+# omarchy-brightness-keyboard key, lock-blank and restore paths.
 tick_tmp=$(mktemp -d)
 trap 'rm -rf "$fake" "$leds" "$tick_tmp"' EXIT
 
-extract_fn() {
-  sed -n "/^$1()/,/^}/p" "$auto"
-}
-
-DARK_LUX=8
-BRIGHT_LUX=180
-DEADBAND_PERCENT=4
-OVERRIDE_LUX_DELTA=20
-OVERRIDE_LUX_RATIO=40
-EFFECTIVELY_OFF_PERCENT=2
-
-eval "$(extract_fn lux_to_percent)"
-eval "$(extract_fn led_effectively_off)"
-eval "$(extract_fn read_lux)"
-eval "$(extract_fn session_locked)"
-eval "$(extract_fn lid_closed)"
-eval "$(extract_fn apply_percent)"
-eval "$(extract_fn tick)"
+export XDG_RUNTIME_DIR="$tick_tmp/run"
+export OMARCHY_LEDS_DIR="$tick_tmp/leds"
+eval "$(grep -E '^[A-Z_]+=[0-9]+$|^manual_file=' "$auto")"
+for fn in lux_to_percent led_effectively_off last_key_turned_off read_lux session_locked lid_closed apply_percent tick; do
+  eval "$(sed -n "/^$fn()/,/^}/p" "$auto")"
+done
+[[ -n ${manual_file:-} ]] || fail "the daemon defines where key presses are recorded"
 
 max=255
 led_effectively_off 0 || fail "0 is effectively off"
-led_effectively_off 2 || fail "2/255 (1%) is effectively off"
 led_effectively_off 5 || fail "5/255 (2%) is effectively off"
 if led_effectively_off 6; then
-  fail "6/255 is above the 2% leftover band"
+  fail "6/255 is above the effectively-off band"
 fi
-pass "a 1% leftover is treated as off, a visible 3% is not"
+pass "the LED counts as off up to 2% of max"
 
-iio="$tick_tmp/iio"
 stub="$tick_tmp/bin"
-kbd="$tick_tmp/leds"
-mkdir -p "$iio/iio:device1" "$kbd/kbd_backlight" "$stub"
-printf 'aop-sensors-als\n' >"$iio/iio:device1/name"
-printf '26\n' >"$iio/iio:device1/in_illuminance_input"
-printf '255\n' >"$kbd/kbd_backlight/max_brightness"
-printf '2\n' >"$kbd/kbd_backlight/brightness"
+mkdir -p "$XDG_RUNTIME_DIR" "$OMARCHY_LEDS_DIR/kbd_backlight" "$tick_tmp/iio/iio:device0" "$stub"
+printf 'aop-sensors-als\n' >"$tick_tmp/iio/iio:device0/name"
+printf '255\n' >"$OMARCHY_LEDS_DIR/kbd_backlight/max_brightness"
+printf '0\n' >"$OMARCHY_LEDS_DIR/kbd_backlight/brightness"
 
+# brightnessctl over the fake LED; -s saves the level and -r restores it.
 cat >"$stub/brightnessctl" <<'SH'
 #!/bin/bash
-device=""
+save=0
+restore=0
 while (($#)); do
   case "$1" in
-    -d)
-      device=$2
+    -*d)
+      [[ $1 == *s* ]] && save=1
+      [[ $1 == *r* ]] && restore=1
+      led="$OMARCHY_LEDS_DIR/$2"
       shift 2
       ;;
-    get)
-      cat "$OMARCHY_LEDS_DIR/$device/brightness"
-      exit 0
-      ;;
+    get) exec cat "$led/brightness" ;;
+    max) exec cat "$led/max_brightness" ;;
     set)
-      printf '%s\n' "$2" >"$OMARCHY_LEDS_DIR/$device/brightness"
+      (( save )) && cp "$led/brightness" "$led/saved"
+      printf '%s\n' "$2" >"$led/brightness"
       exit 0
       ;;
-    *)
-      shift
-      ;;
+    *) shift ;;
   esac
 done
-exit 1
+(( restore )) && cp "$led/saved" "$led/brightness"
+exit 0
 SH
 
 cat >"$stub/omarchy-hyprland-session-locked" <<'SH'
@@ -177,46 +159,135 @@ SH
 
 cat >"$stub/omarchy-hw-laptop-closed" <<'SH'
 #!/bin/bash
-exit "${LID_CLOSED:-1}"
+exit 1
 SH
 
 chmod +x "$stub"/*
-
-als_path="$iio/iio:device1/in_illuminance_input"
-kbd_path="$kbd/kbd_backlight"
-device=kbd_backlight
-max=255
-export OMARCHY_LEDS_DIR=$kbd
 export PATH="$stub:$PATH"
 
-last_set=2
-paused=1
-pause_lux=26
-tick
-got=$(<"$kbd/kbd_backlight/brightness")
-[[ $got == 226 ]] || fail "paused 1% leftover in a dark room is re-applied from ALS" "got $got"
-(( paused == 0 )) || fail "recovering from an off leftover clears the pause"
-pass "a paused 1% leftover in a dark room is restored from ALS"
-
-printf '226\n' >"$kbd/kbd_backlight/brightness"
-last_set=226
+als_path="$tick_tmp/iio/iio:device0/in_illuminance_input"
+device=kbd_backlight
+last_set=""
 paused=0
 pause_lux=0
-printf '128\n' >"$kbd/kbd_backlight/brightness"
-tick
-got=$(<"$kbd/kbd_backlight/brightness")
-[[ $got == 128 ]] || fail "a visible manual level still pauses auto" "got $got"
-(( paused == 1 )) || fail "a visible manual level should set paused"
-tick
-got=$(<"$kbd/kbd_backlight/brightness")
-[[ $got == 128 ]] || fail "paused manual level is kept while lux is stable" "got $got"
-pass "Shift+F1/F2 to a visible level still pauses automatic control"
 
-printf '2\n' >"$kbd/kbd_backlight/brightness"
-last_set=2
-paused=1
-pause_lux=26
-SESSION_LOCKED=0 tick
-got=$(<"$kbd/kbd_backlight/brightness")
-[[ $got == 2 ]] || fail "lock still pauses automatic control" "got $got"
-pass "lock still skips ALS while the session is locked"
+set_lux() {
+  printf '%s\n' "$1" >"$als_path"
+}
+
+led() {
+  cat "$OMARCHY_LEDS_DIR/kbd_backlight/brightness"
+}
+
+keyboard() {
+  "$ROOT/bin/omarchy-brightness-keyboard" --no-osd "$1"
+}
+
+# Lock and let the lock screen blank the keys, then unlock. The unlock poll can
+# land before the wake-up restore runs, or no restore comes at all.
+lock_blank_unlock() {
+  keyboard off
+  SESSION_LOCKED=0 tick
+  [[ $(led) == 0 ]] || fail "ALS leaves the keys alone while the session is locked" "got $(led)"
+  tick
+}
+
+# Naming a variable that is set, a record would run commands if evaluated.
+printf 'max[$(touch %s)]\n' "$tick_tmp/injected" >"$manual_file"
+if ( last_key_turned_off ); then
+  fail "a non-numeric key-press record counts as a key press"
+fi
+[[ ! -e $tick_tmp/injected ]] || fail "the key-press record was evaluated as arithmetic"
+rm "$manual_file"
+pass "the key-press record is read as a number and never evaluated"
+
+# 26 lux is a dim room: ALS wants 89%, 226/255.
+set_lux 26
+tick
+[[ $(led) == 226 ]] || fail "first poll lights the keys from ALS" "got $(led)"
+
+lock_blank_unlock
+[[ $(led) == 226 ]] || fail "a lock blank left behind after unlock is relit from ALS" "got $(led)"
+(( paused == 0 )) || fail "a lock blank does not pause ALS"
+pass "a lock-screen blank does not leave the keys dark after unlock"
+
+printf '2\n' >"$OMARCHY_LEDS_DIR/kbd_backlight/saved"
+keyboard restore
+tick
+[[ $(led) == 226 ]] || fail "a restored 1% save is relit from ALS" "got $(led)"
+pass "a saved near-zero backlight restore does not leave the keys dark"
+
+# Stepping down from 226 stops at 1/255: dark, and the OSD already reads 0%.
+until led_effectively_off "$(led)"; do
+  keyboard down
+done
+[[ $(led) == 1 ]] || fail "stepping down from 226 lands on 1" "got $(led)"
+# Lock before the next poll: the first level ALS sees is the blank's 0.
+lock_blank_unlock
+[[ $(led) == 0 ]] || fail "a lock blank does not relight keys turned off by hand" "got $(led)"
+(( paused == 1 )) || fail "turning the keys off by hand pauses ALS"
+keyboard restore
+tick
+[[ $(led) == 1 ]] || fail "keys turned off by hand stay off through lock and wake" "got $(led)"
+set_lux 0
+tick
+[[ $(led) == 1 ]] || fail "keys turned off by hand stay off when the room goes dark" "got $(led)"
+pass "keys turned off by hand stay off through lock, wake and room light changes"
+
+keyboard up
+tick
+[[ $(led) == 26 ]] || fail "the next key press is kept" "got $(led)"
+(( paused == 1 )) || fail "a visible key-press level pauses ALS"
+set_lux 8
+tick
+[[ $(led) == 26 ]] || fail "a visible key-press level holds while the room light is stable" "got $(led)"
+set_lux 26
+tick
+[[ $(led) == 226 ]] || fail "ALS resumes once the room light moves past the old choice" "got $(led)"
+pass "the next key press ends the hold, and ALS resumes when the room light moves"
+
+# Down at 0 on the blanked lock screen changes nothing, so it must not make a
+# later blank look deliberate.
+keyboard off
+keyboard down
+keyboard restore
+tick
+lock_blank_unlock
+[[ $(led) == 226 ]] || fail "a key press that changed nothing made a later lock blank look deliberate" "got $(led)"
+pass "a key press that changes nothing is not taken for a deliberate off"
+
+until (( $(led) == 0 )); do
+  keyboard down
+done
+tick
+brightnessctl -d kbd_backlight set 128
+tick
+[[ $(led) == 128 ]] || fail "a visible level from another tool is kept" "got $(led)"
+(( paused == 1 )) || fail "a visible level from another tool pauses ALS"
+pass "a visible level from another tool still pauses ALS"
+
+# ALS writing the keys again ends the old deliberate off: a later lock blank is
+# not that choice coming back.
+set_lux 0
+tick
+[[ $(led) == 255 ]] || fail "ALS resumes once the room light moves past the other tool's level" "got $(led)"
+lock_blank_unlock
+[[ $(led) == 255 ]] || fail "an old deliberate off made a later lock blank look deliberate" "got $(led)"
+pass "once ALS has written the keys again, an old deliberate off does not come back"
+
+# A debug --once run leaves a live key press alone. The daemon itself starts by
+# applying ALS, so it drops any key press from before it ran.
+export OMARCHY_IIO_DEVICES_DIR="$tick_tmp/iio"
+printf '0\n' >"$manual_file"
+"$auto" --once
+[[ -e $manual_file ]] || fail "--once dropped a live key press"
+"$auto" >/dev/null 2>&1 &
+daemon=$!
+for _ in {1..50}; do
+  [[ -e $manual_file ]] || break
+  sleep 0.1
+done
+kill "$daemon" 2>/dev/null || true
+wait "$daemon" 2>/dev/null || true
+[[ ! -e $manual_file ]] || fail "the daemon kept a key press from before it started"
+pass "the daemon drops key presses from before it started, --once leaves them"
