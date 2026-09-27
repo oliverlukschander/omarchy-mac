@@ -555,6 +555,19 @@ Item {
   readonly property bool vertical: position === "left" || position === "right"
   readonly property int barSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
 
+  // Display cutouts (a camera notch) the platform's own package describes in
+  // the fixed platform root, which no environment variable moves. Most machines
+  // have none. See BarModel.parseCutouts.
+  property var displayCutouts: []
+  FileView {
+    path: "/usr/share/omarchy-platform/display-cutouts.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.displayCutouts = BarModel.parseCutouts(text())
+    onLoadFailed: root.displayCutouts = []
+    onFileChanged: reload()
+  }
+
   function normalizePosition(value) {
     return BarModel.normalizePosition(value)
   }
@@ -1247,11 +1260,13 @@ Item {
       window: barWindow
     }
 
+    // Parked by its full thickness, which a notch floor may make more than
+    // barSize, so no strip of it stays on screen.
     margins {
-      top: root.barHidden && root.position === "top" ? -root.barSize : 0
-      bottom: root.barHidden && root.position === "bottom" ? -root.barSize : 0
-      left: root.barHidden && root.position === "left" ? -root.barSize : 0
-      right: root.barHidden && root.position === "right" ? -root.barSize : 0
+      top: root.barHidden && root.position === "top" ? -barWindow.thickness : 0
+      bottom: root.barHidden && root.position === "bottom" ? -barWindow.thickness : 0
+      left: root.barHidden && root.position === "left" ? -barWindow.thickness : 0
+      right: root.barHidden && root.position === "right" ? -barWindow.thickness : 0
     }
 
     anchors {
@@ -1261,8 +1276,26 @@ Item {
       right: root.position === "right" || !root.vertical
     }
 
-    implicitWidth: root.vertical ? root.barSize : 0
-    implicitHeight: root.vertical ? 0 : root.barSize
+    // A top bar shorter than a panel's camera cutout leaves a sliver of every
+    // window peeking out beside the camera, so the cutout is this panel's
+    // minimum sensible top-bar height. An intentionally taller bar still wins.
+    readonly property int notchFloor: BarModel.notchFloor(root.displayCutouts, root.position, screen.name, screen.width, screen.height, screen.devicePixelRatio, panelMode, Style.bar.notchHeight)
+
+    readonly property bool centerBesideRight: BarModel.centerBesideRight(root.displayCutouts, root.position, screen.name, screen.width, screen.height, screen.devicePixelRatio, panelMode)
+
+    // The physical mode, as hyprctl monitors reports it. Qt's whole-number
+    // devicePixelRatio can't rebuild it at a fractional scale.
+    readonly property var hyprMonitor: screen ? Hyprland.monitorFor(screen) : null
+    readonly property var panelMode: hyprMonitor ? ({
+      width: hyprMonitor.width,
+      height: hyprMonitor.height,
+      transform: hyprMonitor.lastIpcObject ? hyprMonitor.lastIpcObject.transform : 0
+    }) : null
+
+    readonly property int thickness: root.vertical ? root.barSize : Math.max(root.barSize, notchFloor)
+
+    implicitWidth: root.vertical ? thickness : 0
+    implicitHeight: root.vertical ? 0 : thickness
     color: root.transparent ? "transparent" : root.background
     surfaceFormat.opaque: false
     WlrLayershell.namespace: "omarchy-bar"
@@ -1353,7 +1386,10 @@ Item {
       Item {
         anchors.fill: parent
 
-        CenterModules { anchors.fill: parent }
+        CenterModules {
+          anchors.fill: parent
+          entries: barWindow.centerBesideRight ? [] : root.layoutEntries("center")
+        }
 
         LeftModules {
           anchors.left: parent.left
@@ -1362,8 +1398,20 @@ Item {
         }
 
         RightModules {
+          id: rightModules
           anchors.right: parent.right
           anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        // Keeps the center region, so settings pushes, drag and drop, and panel
+        // routing still address it. The gap lets a drop at the seam land in
+        // the section the pointer is nearer to.
+        ModuleList {
+          entries: barWindow.centerBesideRight ? root.layoutEntries("center") : []
+          region: "center"
+          anchors.right: rightModules.left
+          anchors.rightMargin: Style.space(4)
           anchors.verticalCenter: parent.verticalCenter
         }
       }
@@ -1515,8 +1563,7 @@ Item {
     }
   }
 
-  function findCenterAnchorEntry() {
-    var entries = root.layoutEntries("center")
+  function findCenterAnchorEntry(entries) {
     var idx = root.entryIndex(entries, root.centerAnchor)
     return idx === -1 ? null : entries[idx]
   }
@@ -1536,7 +1583,7 @@ Item {
 
     property var entries: root.layoutEntries("center")
     readonly property bool hasAnchor: root.entryIndex(entries, root.centerAnchor) !== -1
-    readonly property var anchorEntry: root.findCenterAnchorEntry()
+    readonly property var anchorEntry: root.findCenterAnchorEntry(entries)
 
     Loader {
       anchors.fill: parent

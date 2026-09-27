@@ -382,6 +382,14 @@ size-vertical   = 28   # left/right bar width at base-size 12
 
 Set `scale-with-font = false` to keep those bar sizes as fixed pixels.
 
+A panel with a camera cutout (a notch) at its top keeps a top bar out of it: the bar is never shorter than the cutout, and its center section sits beside the right one. Omarchy knows no panel's cutout itself; the platform's own package describes them in `/usr/share/omarchy-platform/display-cutouts.json`, a fixed path no environment variable moves (see [file-layout.md](file-layout.md#platform-root)):
+
+```json
+{ "panels": [ { "connector": "eDP", "width": 3024, "height": 1964, "top": 64 } ] }
+```
+
+A panel matches a screen whose connector name starts with `connector` and whose mode, as `hyprctl monitors` reports it, is `width` x `height` physical pixels, at any scale; `top` is the physical rows the cutout covers. On such a panel, `[bar] notch-height` (logical pixels, not scaled with the font) sets the floor by hand. The bar reads the file when the shell starts and whenever it changes; a file installed where its directory didn't exist yet (the platform root itself, on a first install) is read at the next shell start.
+
 ## Custom bar modules
 
 If a full plugin is overkill, declare a one-off module inline in
