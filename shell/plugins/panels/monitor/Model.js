@@ -111,6 +111,21 @@ function parseDisplays(raw) {
   }
 }
 
+// The command that switches display `name` off, when enabled, or back on.
+// The internal panel goes through omarchy-hyprland-monitor-internal, which
+// persists the choice and which clamshell respects. An external gets a
+// complete rule through hyprctl eval, as the Lua config refuses `hyprctl
+// keyword`. The name is written into Lua, so only a plain connector passes.
+function displayToggleCommand(name, enabled) {
+  if (!/^[A-Za-z0-9._-]+$/.test(String(name || ""))) return null
+  if (/^(eDP|LVDS|DSI)-/.test(name)) return ["omarchy-hyprland-monitor-internal", enabled ? "off" : "on"]
+
+  var rule = enabled
+    ? '{ output = "' + name + '", disabled = true }'
+    : '{ output = "' + name + '", mode = "preferred", position = "auto", scale = "auto", disabled = false }'
+  return ["hyprctl", "eval", "hl.monitor(" + rule + ")"]
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clampBrightness: clampBrightness,
@@ -119,6 +134,7 @@ if (typeof module !== "undefined") {
     matchingScaleIndex: matchingScaleIndex,
     availableScales: availableScales,
     brightnessName: brightnessName,
-    parseDisplays: parseDisplays
+    parseDisplays: parseDisplays,
+    displayToggleCommand: displayToggleCommand
   }
 }
