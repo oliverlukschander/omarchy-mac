@@ -184,7 +184,7 @@ grep -Fqx "SUPER+1" <<<"$probe" ||
 
 # Modifier order is cosmetic; Hyprland binds the same chord either way.
 probe=$(PATH="$stub_bin:$PATH" list_bindings "$home" \
-  'o.bind("SUPER + ALT + SHIFT + RIGHT", "Conflict probe", "true")' | duplicate_signatures)
-grep -Fqx "ALT+SHIFT+SUPER+RIGHT" <<<"$probe" ||
+  'o.bind("SUPER + ALT + CTRL + RIGHT", "Conflict probe", "true")' | duplicate_signatures)
+grep -Fqx "ALT+CTRL+SUPER+RIGHT" <<<"$probe" ||
   fail "the conflict check ignores modifier order"
 pass "the conflict check catches collisions across keycodes and modifier order"

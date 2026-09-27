@@ -1,5 +1,6 @@
 -- Remembered display state in ~/.local/state/omarchy/displays.json:
---   displays: identity -> { selector, size = { w, h } in pixels, scale, transform }
+--   displays: identity -> { selector, size = { w, h } in pixels, scale,
+--             transform, block (its workspaces are block * 10 + 1..10) }
 --   layouts:  arrangements the user made, most recent first,
 --             each { positions = { identity = { x, y } } }
 -- It is read and written with io.open and never require()'d: Hyprland watches
@@ -201,8 +202,9 @@ local function sanitize(data)
       local size = point(display.size)
       local scale = type(display.scale) == "number" and model.snap_scale(display.scale)
       local transform = math.tointeger(display.transform or 0)
+      local block = math.tointeger(display.block)
       if size and size[1] > 0 and size[2] > 0 and scale and scale >= 0.25 and scale <= 10 and transform and transform >= 0 and transform <= 7 then
-        state.displays[key] = { selector = display.selector, size = size, scale = scale, transform = transform }
+        state.displays[key] = { selector = display.selector, size = size, scale = scale, transform = transform, block = block and block >= 0 and block or nil }
       end
     end
   end

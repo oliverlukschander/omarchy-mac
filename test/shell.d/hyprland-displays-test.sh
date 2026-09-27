@@ -255,7 +255,7 @@ require("default.hypr.helpers")
 local H
 
 local function reset_hyprland()
-  H = { outputs = {}, order = {}, rules = {}, handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
+  H = { outputs = {}, order = {}, rules = {}, workspace_rules = {}, dispatched = {}, submap = "", handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
 end
 reset_hyprland()
 
@@ -406,12 +406,37 @@ hl = {
   exec_cmd = function(command)
     H.notes[#H.notes + 1] = command
   end,
+  workspace_rule = function(rule)
+    H.workspace_rules[#H.workspace_rules + 1] = rule
+  end,
+  dispatch = function(action)
+    H.dispatched[#H.dispatched + 1] = action
+    if action.submap then
+      H.submap = action.submap == "reset" and "" or action.submap
+    end
+  end,
+  get_current_submap = function()
+    return H.submap
+  end,
+  dsp = {
+    focus = function(args)
+      return { focus = args }
+    end,
+    submap = function(name)
+      return { submap = name }
+    end,
+    window = {
+      move = function(args)
+        return { move = args }
+      end,
+    },
+  },
 }
 
 -- A reload clears rules, handlers and timers, then runs the config again in
 -- a fresh Lua state.
 local function load_config(after)
-  H.rules, H.handlers, H.timers = {}, {}, {}
+  H.rules, H.workspace_rules, H.handlers, H.timers = {}, {}, {}, {}
   omarchy_displays = nil
   for _, module in ipairs({ "default.hypr.displays", "default.hypr.displays.model", "default.hypr.displays.store" }) do
     package.loaded[module] = nil
@@ -664,8 +689,90 @@ eq(pos("USB-4"), "1152,-630", "the Dell keeps its side and bottom edge at 1.6")
 eq(modesets("USB-4"), 1, "one modeset for the rescaled display")
 eq(modesets("eDP-1") + modesets("USB-2"), 0, "no modeset for the others")
 
+-- Workspaces: each display owns ten ids, the laptop 1-10, then in the order
+-- displays were first seen. Slots 1-5 are pinned persistent to the display's
+-- identity, and every display known to the store is pinned at load.
+local function rules_for(workspace)
+  local found = {}
+  for _, rule in ipairs(H.workspace_rules) do
+    if rule.workspace == workspace then
+      found[#found + 1] = rule
+    end
+  end
+  return found
+end
+
+load_config()
+settle()
+eq(#rules_for("1"), 1, "the laptop's first slot is pinned once")
+eq(rules_for("1")[1].monitor, "eDP-1", "the laptop's slots are pinned to the panel")
+eq(rules_for("1")[1].default, true, "slot 1 is the display's default workspace")
+eq(rules_for("5")[1].persistent, true, "slots 1-5 are persistent")
+eq(rules_for("6")[1].persistent, false, "slots 6-10 exist only while used")
+eq(rules_for("11")[1].monitor, "desc:" .. benq, "the BenQ's slots are pinned by identity, on any port")
+eq(#rules_for("21"), 0, "the TV, selected by connector, has a block but no pinned slots")
+eq(rules_for("41")[1].monitor, "desc:DEL U2723QE ABC", "the Dell got the next free block after the TV and the LG")
+for _, rule in ipairs(H.workspace_rules) do
+  assert(rule.monitor ~= "USB-3", "a display selected by connector is not pinned")
+end
+local pinned = #H.workspace_rules
+omarchy_displays.place(3, "right")
+settle()
+eq(#H.workspace_rules, pinned, "a later change doesn't pin anything again")
+
+H.focused = "USB-2"
+H.dispatched = {}
+omarchy_displays.focus_slot(3)
+eq(H.dispatched[1].focus.workspace, "13", "SUPER+3 on the BenQ is its third slot")
+omarchy_displays.move_to_slot(2, false)
+eq(H.dispatched[2].move.workspace, "12", "SUPER+SHIFT+ALT+2 moves to the BenQ's second slot")
+eq(H.dispatched[2].move.follow, false, "silently")
+H.focused = "eDP-1"
+omarchy_displays.focus_slot(10)
+eq(H.dispatched[3].focus.workspace, "10", "SUPER+0 on the laptop is workspace 10, as before")
+
+-- SUPER+D, then a number: D1 is the leftmost display.
+omarchy_displays.choose_display()
+eq(H.submap, "display", "SUPER+D enters the display submap")
+omarchy_displays.send_window(1)
+eq(H.dispatched[#H.dispatched].move.monitor, "USB-2", "D1 is the BenQ on the left")
+H.submap = "display"
+settle()
+eq(H.submap, "", "the submap is left after 1.5 s")
+omarchy_displays.choose_display()
+local timers = H.timers
+H.timers = {}
+omarchy_displays.choose_display()
+timers[1]()
+eq(H.submap, "display", "an earlier timer doesn't cut a new SUPER+D short")
+settle()
+
+-- Blocks survive a reload and a restart.
+local saved = store.load()
+eq(saved.displays["eDP-1"].block, 0, "the laptop's block is stored")
+eq(saved.displays["desc:" .. benq].block, 1, "the BenQ's block is stored")
+
+-- The first start on a running desktop with both displays on: the laptop gets
+-- 1-10 even though the BenQ's identity sorts first.
+os.remove(os.getenv("HOME") .. "/.local/state/omarchy/displays.json")
+reset_hyprland()
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
+connect("eDP-1", "", "", 3456, 2160, 2)
+load_config()
+settle()
+eq(store.load().displays["eDP-1"].block, 0, "the laptop gets 1-10")
+eq(store.load().displays["desc:" .. benq].block, 1, "the BenQ gets 11-20")
+
+-- A Mac without an internal panel: the first display gets 1-10.
+os.remove(os.getenv("HOME") .. "/.local/state/omarchy/displays.json")
+reset_hyprland()
+load_config()
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
+settle()
+eq(store.load().displays["desc:" .. benq].block, 0, "without an internal panel the first display gets 1-10")
+
 print(omarchy_displays.status())
 print("flow ok")
 LUA
 ) || fail "display arrangement flow" "$flow_output"
-pass "display arrangement: first sight, place, replug, scale, outside changes, reload, boot, clamshell, mirror, ports, three displays"
+pass "display arrangement: first sight, place, replug, scale, outside changes, reload, boot, clamshell, mirror, ports, three displays, workspaces"
