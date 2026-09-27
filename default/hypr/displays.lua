@@ -379,32 +379,38 @@ local function rescale(live, scales)
 end
 
 -- Give the display on connector `name` a new scale, snapped to a clean one.
--- Main is the size reference: the others follow it, except the ones tuned
--- by hand. Any other display is tuned by hand, which also teaches the desk
--- factor. Used by SUPER+/ and by omarchy-hyprland-monitor-scaling for the
--- Monitor panel.
-function M.set_scale(name, scale)
+-- Automatically (while no display is tuned by hand) every display keeps in
+-- proportion to main: setting another display's scale moves main to match,
+-- and the others follow main. Tuned by hand (by_hand, or once any display
+-- is) a display other than main keeps its own scale, which also teaches the
+-- desk factor. Used by SUPER+/ and by the Monitor panel.
+function M.set_scale(name, scale, by_hand)
   if mirrored or type(scale) ~= "number" or scale < 0.25 then
     return
   end
 
   local live = read_live()
   local main = model.main(live)
+  local factor = state.factor or model.DESK_FACTOR
+  by_hand = by_hand or M.scale_mode() == "each"
   for key, m in pairs(live) do
     if m.name == name then
-      local scales = { [key] = model.clean_scale(scale, m.width, m.height) }
-      local tuned = model.moved(m, m.x, m.y)
-      tuned.scale = scales[key]
+      local chosen = model.moved(m, m.x, m.y)
+      chosen.scale = model.clean_scale(scale, m.width, m.height)
+      local scales = { [key] = chosen.scale }
 
-      if key == main then
+      if key ~= main and by_hand then
+        state.displays[key].tuned = true
+        state.factor = model.desk_factor(chosen, live[main]) or state.factor
+      else
+        local reference = model.moved(live[main], 0, 0)
+        reference.scale = key == main and chosen.scale or model.main_scale_for(chosen, live[main], factor) or reference.scale
+        scales[main] = reference.scale
         for other, d in pairs(live) do
-          if other ~= key and not state.displays[other].tuned then
-            scales[other] = model.derived_scale(d, tuned, state.factor or model.DESK_FACTOR)
+          if other ~= key and other ~= main and not state.displays[other].tuned then
+            scales[other] = model.derived_scale(d, reference, factor)
           end
         end
-      else
-        state.displays[key].tuned = true
-        state.factor = model.desk_factor(tuned, live[main]) or state.factor
       end
 
       rescale(live, scales)

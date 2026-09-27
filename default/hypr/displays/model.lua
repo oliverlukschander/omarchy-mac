@@ -170,6 +170,20 @@ function M.derived_scale(d, main, factor)
   return M.nearest_clean(dppi / target, d.width, d.height)
 end
 
+-- The main scale at which d would be derived at the scale it has, the
+-- inverse of derived_scale; nil without EDID sizes.
+function M.main_scale_for(d, main, factor)
+  local dppi, mppi = ppi(d), ppi(main)
+  if not dppi or not mppi then
+    return nil
+  end
+  local ratio = 1
+  if M.is_internal(d.key) ~= M.is_internal(main.key) then
+    ratio = M.is_internal(main.key) and factor or 1 / factor
+  end
+  return M.nearest_clean(d.scale * mppi * ratio / dppi, main.width, main.height)
+end
+
 -- The desk factor that d, just tuned by the user, implies against main, or
 -- nil when they're the same kind of display or sizes are unknown.
 function M.desk_factor(d, main)

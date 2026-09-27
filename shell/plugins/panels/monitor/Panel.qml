@@ -343,9 +343,10 @@ Panel {
     if (!actionProc.running) actionProc.running = true
   }
 
-  function setScale(scale, name) {
+  // by_hand tunes the display on its own (the Per display rows).
+  function setScale(scale, name, byHand) {
     if (arranged) {
-      actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + ")"]
+      actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + (byHand ? ", true" : "") + ")"]
     } else {
       actionProc.command = ["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale]
     }
@@ -956,7 +957,7 @@ Panel {
                     bordered: true
                     width: (displayScales.width - Style.space(24) - displayScales.spacing * displayScales.values.length) / displayScales.values.length
                     active: displayScales.active === index
-                    onClicked: root.setScale(modelData, displayScales.modelData.name)
+                    onClicked: root.setScale(modelData, displayScales.modelData.name, true)
                   }
                 }
               }
