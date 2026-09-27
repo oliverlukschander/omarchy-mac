@@ -27,13 +27,13 @@ end
 for workspace = 1, 10 do
   local key = "code:" .. tostring(workspace + 9)
   o.bind("SUPER + " .. key, "Switch to workspace " .. workspace, function()
-    displays().focus_slot(workspace)
+    hl.dispatch(hl.dsp.focus({ workspace = displays().slot(workspace) }))
   end)
   o.bind("SUPER + SHIFT + " .. key, "Move window to workspace " .. workspace, function()
-    displays().move_to_slot(workspace)
+    hl.dispatch(hl.dsp.window.move({ workspace = displays().slot(workspace) }))
   end)
   o.bind("SUPER + SHIFT + ALT + " .. key, "Move window silently to workspace " .. workspace, function()
-    displays().move_to_slot(workspace, false)
+    hl.dispatch(hl.dsp.window.move({ workspace = displays().slot(workspace), follow = false }))
   end)
 end
 
@@ -51,21 +51,22 @@ o.bind("SUPER + CTRL + ALT + RIGHT", "Move window to right monitor", hl.dsp.wind
 o.bind("SUPER + CTRL + ALT + UP", "Move window to up monitor", hl.dsp.window.move({ monitor = "u" }))
 o.bind("SUPER + CTRL + ALT + DOWN", "Move window to down monitor", hl.dsp.window.move({ monitor = "d" }))
 
--- SUPER+D, then a display's number (D1 is the leftmost), sends the window
--- there. Any other key leaves the submap, and so does waiting 1.5 s.
+-- SUPER+D, then a display's number (D1 is the leftmost), with or without
+-- SUPER held, sends the window there. Modifier keys alone keep the submap
+-- open; any other key leaves it and is swallowed, and so does waiting 1.5 s.
 o.bind("SUPER + D", "Send window to display (then its number)", function()
   displays().choose_display()
 end)
-hl.define_submap("display", "reset", function()
+hl.define_submap("display", function()
   for number = 1, 9 do
-    local key = "code:" .. tostring(number + 9)
-    local send = function()
+    hl.bind("code:" .. tostring(number + 9), function()
       displays().send_window(number)
-    end
-    hl.bind(key, send)
-    hl.bind("SUPER + " .. key, send)
+    end, { ignore_mods = true })
   end
-  hl.bind("catchall", hl.dsp.submap("reset"))
+  for _, modifier in ipairs({ "Super_L", "Super_R", "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R" }) do
+    hl.bind(modifier, hl.dsp.no_op(), { ignore_mods = true })
+  end
+  hl.bind("catchall", hl.dsp.submap("reset"), { ignore_mods = true })
 end)
 
 o.bind("SUPER + SHIFT + LEFT", "Swap window to the left", hl.dsp.window.swap({ direction = "l" }))

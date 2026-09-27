@@ -146,37 +146,37 @@ end
 
 -- Each display owns ten workspace ids: the internal panel 1-10, the next
 -- display seen 11-20, and so on. On a machine without an internal panel the
--- first display gets 1-10.
-local function free_block(key)
-  local taken, internal = {}, model.is_internal(key)
-  for other, display in pairs(state.displays) do
+-- first display gets 1-10. has_panel says whether this one has one.
+local function free_block(key, has_panel)
+  local taken = {}
+  for _, display in pairs(state.displays) do
     taken[display.block or -1] = true
-    internal = internal or model.is_internal(other)
   end
-  local block = (model.is_internal(key) or not internal) and 0 or 1
+  local block = (model.is_internal(key) or not has_panel) and 0 or 1
   while taken[block] do
     block = block + 1
   end
   return block
 end
 
--- Bind a display's workspaces to it, slots 1-5 persistent, so Hyprland keeps
--- them there and brings them home when the display reconnects on any port.
--- Workspace rules can't be removed at runtime, so a display selected by
--- connector isn't pinned: its rules would catch the next monitor on the port.
+-- Bind a display's workspaces to it, so Hyprland creates them there and
+-- brings them home when the display reconnects on any port. They aren't
+-- persistent: empty ones go away, as they always have. Workspace rules can't
+-- be removed at runtime, so a display selected by connector isn't pinned, and
+-- neither is a model seen as twins: those rules would catch another monitor.
 local function pin(key)
   local display = state.displays[key]
   if pinned[key] or not display.block or not model.safe_when_absent(display.selector) then
     return
   end
+  for other in pairs(state.displays) do
+    if other:sub(1, #key + 1) == key .. "@" then
+      return
+    end
+  end
   pinned[key] = true
   for slot = 1, 10 do
-    hl.workspace_rule({
-      workspace = tostring(display.block * 10 + slot),
-      monitor = display.selector,
-      persistent = slot <= 5,
-      default = slot == 1,
-    })
+    hl.workspace_rule({ workspace = tostring(display.block * 10 + slot), monitor = display.selector, default = slot == 1 })
   end
 end
 
@@ -202,24 +202,20 @@ local function commit(present, made_by_user)
   present = model.connect(present, state.layouts)
   targets = {}
 
-  -- The internal panel first, so it's the one that gets workspaces 1-10.
-  local keys = {}
-  for key in pairs(present) do
-    keys[#keys + 1] = key
+  -- Block 0 stays the panel's, even while clamshell keeps it off.
+  local has_panel = internal_off
+  for key in pairs(state.displays) do
+    has_panel = has_panel or model.is_internal(key)
   end
-  table.sort(keys, function(a, b)
-    if model.is_internal(a) ~= model.is_internal(b) then
-      return model.is_internal(a)
-    end
-    return a < b
-  end)
+  for key in pairs(present) do
+    has_panel = has_panel or model.is_internal(key)
+  end
 
-  for _, key in ipairs(keys) do
-    local rect = present[key]
+  for key, rect in pairs(present) do
     targets[rect.name] = rect
     local display = state.displays[key] or {}
     display.selector, display.size, display.scale, display.transform = rect.selector, { rect.width, rect.height }, rect.scale, rect.transform
-    display.block = display.block or free_block(key)
+    display.block = display.block or free_block(key, has_panel)
     state.displays[key] = display
     pin(key)
   end
@@ -412,25 +408,16 @@ function M.place(number, side, reference)
   return true
 end
 
--- The workspace id of slot n on the display that has focus.
-local function slot(n)
+-- The workspace id of slot n on the display that has focus (SUPER+1..0).
+function M.slot(n)
   local active = hl.get_active_monitor()
   local rect = active and targets[active.name]
   local display = rect and state.displays[rect.key]
   return tostring((display and display.block or 0) * 10 + n)
 end
 
-function M.focus_slot(n)
-  hl.dispatch(hl.dsp.focus({ workspace = slot(n) }))
-end
-
--- follow = false moves the window without going along.
-function M.move_to_slot(n, follow)
-  hl.dispatch(hl.dsp.window.move({ workspace = slot(n), follow = follow }))
-end
-
 -- SUPER+D: the next digit picks the display to send the focused window to.
--- The "display" submap is left after any key, or after 1.5 s without one.
+-- The "display" submap is left after any other key, or after 1.5 s.
 function M.choose_display()
   hl.dispatch(hl.dsp.submap("display"))
   choosing = choosing + 1
@@ -447,6 +434,7 @@ end
 function M.send_window(number)
   local present = current()
   local key = model.numbering(present)[number]
+  hl.dispatch(hl.dsp.submap("reset"))
   if key then
     hl.dispatch(hl.dsp.window.move({ monitor = present[key].name }))
   end

@@ -222,6 +222,15 @@ local clean = store.sanitize({
 })
 assert(clean.displays.ok and not clean.displays.bad, "invalid display records are dropped")
 assert(not clean.displays.tiny and not clean.displays.turned and not clean.displays.fractional, "out-of-range values are dropped")
+local blocks = store.sanitize({
+  version = 1,
+  displays = {
+    a = { selector = "a", size = { 1, 1 }, scale = 1, block = 1 },
+    b = { selector = "b", size = { 1, 1 }, scale = 1, block = 1 },
+    c = { selector = "c", size = { 1, 1 }, scale = 1, block = 9999 },
+  },
+}).displays
+assert(blocks.a.block == 1 and blocks.b.block == nil and blocks.c.block == nil, "duplicate or wild blocks are handed out again")
 assert(clean.displays.ok.scale == 2, "stored scales snap to k/120")
 assert(#clean.layouts == 1, "invalid layouts are dropped")
 assert(#store.sanitize({ version = 99 }).layouts == 0, "unknown versions start fresh")
@@ -690,8 +699,9 @@ eq(modesets("USB-4"), 1, "one modeset for the rescaled display")
 eq(modesets("eDP-1") + modesets("USB-2"), 0, "no modeset for the others")
 
 -- Workspaces: each display owns ten ids, the laptop 1-10, then in the order
--- displays were first seen. Slots 1-5 are pinned persistent to the display's
--- identity, and every display known to the store is pinned at load.
+-- displays were first seen. They're pinned to the display's identity, not
+-- persistent, and every display known to the store is pinned at load, even
+-- one that isn't connected.
 local function rules_for(workspace)
   local found = {}
   for _, rule in ipairs(H.workspace_rules) do
@@ -707,8 +717,7 @@ settle()
 eq(#rules_for("1"), 1, "the laptop's first slot is pinned once")
 eq(rules_for("1")[1].monitor, "eDP-1", "the laptop's slots are pinned to the panel")
 eq(rules_for("1")[1].default, true, "slot 1 is the display's default workspace")
-eq(rules_for("5")[1].persistent, true, "slots 1-5 are persistent")
-eq(rules_for("6")[1].persistent, false, "slots 6-10 exist only while used")
+eq(rules_for("5")[1].persistent, nil, "empty workspaces go away, as before")
 eq(rules_for("11")[1].monitor, "desc:" .. benq, "the BenQ's slots are pinned by identity, on any port")
 eq(#rules_for("21"), 0, "the TV, selected by connector, has a block but no pinned slots")
 eq(rules_for("41")[1].monitor, "desc:DEL U2723QE ABC", "the Dell got the next free block after the TV and the LG")
@@ -721,21 +730,17 @@ settle()
 eq(#H.workspace_rules, pinned, "a later change doesn't pin anything again")
 
 H.focused = "USB-2"
-H.dispatched = {}
-omarchy_displays.focus_slot(3)
-eq(H.dispatched[1].focus.workspace, "13", "SUPER+3 on the BenQ is its third slot")
-omarchy_displays.move_to_slot(2, false)
-eq(H.dispatched[2].move.workspace, "12", "SUPER+SHIFT+ALT+2 moves to the BenQ's second slot")
-eq(H.dispatched[2].move.follow, false, "silently")
+eq(omarchy_displays.slot(3), "13", "SUPER+3 on the BenQ is its third slot")
 H.focused = "eDP-1"
-omarchy_displays.focus_slot(10)
-eq(H.dispatched[3].focus.workspace, "10", "SUPER+0 on the laptop is workspace 10, as before")
+eq(omarchy_displays.slot(10), "10", "SUPER+0 on the laptop is workspace 10, as before")
+H.dispatched = {}
 
 -- SUPER+D, then a number: D1 is the leftmost display.
 omarchy_displays.choose_display()
 eq(H.submap, "display", "SUPER+D enters the display submap")
 omarchy_displays.send_window(1)
 eq(H.dispatched[#H.dispatched].move.monitor, "USB-2", "D1 is the BenQ on the left")
+eq(H.submap, "", "sending leaves the submap")
 H.submap = "display"
 settle()
 eq(H.submap, "", "the submap is left after 1.5 s")
@@ -746,6 +751,13 @@ omarchy_displays.choose_display()
 timers[1]()
 eq(H.submap, "display", "an earlier timer doesn't cut a new SUPER+D short")
 settle()
+
+-- A display that isn't connected is still pinned at load, so its windows go
+-- home the moment it connects.
+disconnect("USB-4")
+settle()
+load_config()
+eq(rules_for("41")[1].monitor, "desc:DEL U2723QE ABC", "an absent display's slots are pinned at load")
 
 -- Blocks survive a reload and a restart.
 local saved = store.load()
@@ -763,6 +775,19 @@ settle()
 eq(store.load().displays["eDP-1"].block, 0, "the laptop gets 1-10")
 eq(store.load().displays["desc:" .. benq].block, 1, "the BenQ gets 11-20")
 
+-- The first start docked with the lid closed: the panel is off, but its
+-- block stays free for it.
+os.remove(os.getenv("HOME") .. "/.local/state/omarchy/displays.json")
+reset_hyprland()
+flag = io.open(toggles .. "internal-monitor-clamshell.lua", "w")
+flag:write("-- clamshell\n")
+flag:close()
+load_config()
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
+settle()
+eq(store.load().displays["desc:" .. benq].block, 1, "in clamshell the external still gets 11-20")
+os.remove(toggles .. "internal-monitor-clamshell.lua")
+
 -- A Mac without an internal panel: the first display gets 1-10.
 os.remove(os.getenv("HOME") .. "/.local/state/omarchy/displays.json")
 reset_hyprland()
@@ -770,6 +795,19 @@ load_config()
 connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
 settle()
 eq(store.load().displays["desc:" .. benq].block, 0, "without an internal panel the first display gets 1-10")
+
+-- A model once seen as twins isn't pinned by description, which would catch
+-- both twins. Rules can't be taken back at runtime, so that holds from the
+-- next load on.
+connect("USB-5", "LG 27UL850 ABC", "ABC", 3840, 2160, 2)
+connect("USB-6", "LG 27UL850 ABC", "ABC", 3840, 2160, 2)
+settle()
+disconnect("USB-6")
+settle()
+load_config()
+for _, rule in ipairs(H.workspace_rules) do
+  assert(rule.monitor ~= "desc:LG 27UL850 ABC", "a model seen as twins isn't pinned by description")
+end
 
 print(omarchy_displays.status())
 print("flow ok")

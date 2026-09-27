@@ -197,14 +197,23 @@ local function sanitize(data)
     return state
   end
 
-  for key, display in pairs(type(data.displays) == "table" and data.displays or {}) do
-    if type(key) == "string" and type(display) == "table" and type(display.selector) == "string" then
+  local displays, keys, used = type(data.displays) == "table" and data.displays or {}, {}, {}
+  for key in pairs(displays) do
+    keys[#keys + 1] = type(key) == "string" and key or nil
+  end
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    local display = displays[key]
+    if type(display) == "table" and type(display.selector) == "string" then
       local size = point(display.size)
       local scale = type(display.scale) == "number" and model.snap_scale(display.scale)
       local transform = math.tointeger(display.transform or 0)
+      -- A duplicate or wild block is dropped and handed out again.
       local block = math.tointeger(display.block)
+      block = block and block >= 0 and block < 100 and not used[block] and block or nil
       if size and size[1] > 0 and size[2] > 0 and scale and scale >= 0.25 and scale <= 10 and transform and transform >= 0 and transform <= 7 then
-        state.displays[key] = { selector = display.selector, size = size, scale = scale, transform = transform, block = block and block >= 0 and block or nil }
+        state.displays[key] = { selector = display.selector, size = size, scale = scale, transform = transform, block = block }
+        used[block or -1] = true
       end
     end
   end
