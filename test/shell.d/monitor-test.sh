@@ -124,4 +124,7 @@ assertDeepEqual(
   'monitor switches the internal panel through its own command'
 )
 assertEqual(monitor.displayToggleCommand('DP-1"}) os.exit()--', true), null, 'monitor refuses an unsafe display name')
+assertEqual(monitor.displayLabel({ name: 'eDP-1', model: '' }), 'Built-in display', 'monitor calls the internal panel the built-in display')
+assertEqual(monitor.displayLabel({ name: 'USB-2', model: 'BenQ LCD' }), 'BenQ LCD', 'monitor names an external display by its model')
+assertEqual(monitor.displayLabel({ name: 'DP-1', model: '' }), 'DP-1', 'monitor falls back to the connector')
 JS

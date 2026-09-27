@@ -173,6 +173,14 @@ function snapPosition(others, moving) {
   return best ? { x: best.x, y: best.y } : { x: moving.x, y: moving.y }
 }
 
+// What to call a display: the built-in panel, or the model its EDID
+// reports, with the connector as the last resort.
+function displayLabel(display) {
+  if (!display) return ""
+  if (/^(eDP|LVDS|DSI)-/.test(display.name)) return "Built-in display"
+  return display.model || display.name
+}
+
 // The command that switches display `name` off, when enabled, or back on.
 // The internal panel goes through omarchy-hyprland-monitor-internal, which
 // persists the choice and which clamshell respects. An external gets a
@@ -199,6 +207,7 @@ if (typeof module !== "undefined") {
     brightnessName: brightnessName,
     parseDisplays: parseDisplays,
     snapPosition: snapPosition,
-    displayToggleCommand: displayToggleCommand
+    displayToggleCommand: displayToggleCommand,
+    displayLabel: displayLabel
   }
 }

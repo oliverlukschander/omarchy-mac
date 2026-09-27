@@ -525,21 +525,35 @@ Panel {
       WlrLayershell.namespace: "omarchy-identify"
       WlrLayershell.layer: WlrLayer.Overlay
 
-      Text {
+      Column {
         readonly property var monitor: Hyprland.monitorFor(modelData)
         anchors.centerIn: parent
-        text: {
-          for (var i = 0; i < arrangement.displays.length; i++) {
-            if (monitor && arrangement.displays[i].name === monitor.name) return "D" + (i + 1)
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: {
+            for (var i = 0; i < arrangement.displays.length; i++) {
+              if (parent.monitor && arrangement.displays[i].name === parent.monitor.name) return "D" + (i + 1)
+            }
+            return ""
           }
-          return ""
+          color: "white"
+          style: Text.Outline
+          styleColor: Qt.rgba(0, 0, 0, 0.6)
+          font.family: root.bar.fontFamily
+          font.pixelSize: modelData.height / 4
+          font.bold: true
         }
-        color: "white"
-        style: Text.Outline
-        styleColor: Qt.rgba(0, 0, 0, 0.6)
-        font.family: root.bar.fontFamily
-        font.pixelSize: parent.height / 4
-        font.bold: true
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: parent.monitor ? Model.displayLabel(root.displayNamed(parent.monitor.name)) : ""
+          color: "white"
+          style: Text.Outline
+          styleColor: Qt.rgba(0, 0, 0, 0.6)
+          font.family: root.bar.fontFamily
+          font.pixelSize: modelData.height / 24
+        }
       }
     }
   }
@@ -1126,7 +1140,7 @@ Panel {
 
       Text {
         textFormat: Text.PlainText
-        text: monitorRow.display.name + (monitorRow.display.focused ? " · focused" : "")
+        text: Model.displayLabel(monitorRow.display) + (monitorRow.display.focused ? " · focused" : "")
         color: root.bar.foreground
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
