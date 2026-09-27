@@ -975,10 +975,33 @@ Panel {
             spacing: Style.space(10)
             visible: root.displays.length > 1
 
-            PanelSectionHeader {
-              text: "DISPLAYS"
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(displaysHeader.implicitHeight, identifyButton.implicitHeight)
+
+              PanelSectionHeader {
+                id: displaysHeader
+                text: "DISPLAYS"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Button {
+                id: identifyButton
+                visible: root.mainName !== ""
+                text: "Identify"
+                fontSize: Style.font.caption
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                horizontalPadding: Style.spacing.sm
+                verticalPadding: Style.spacing.controlPaddingY
+                bordered: true
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: root.identify()
+              }
             }
 
             // Drag a display to arrange; ★ in a row makes that display main.
@@ -988,18 +1011,6 @@ Panel {
               visible: root.mainName !== ""
               bar: root.bar
               mainName: root.mainName
-            }
-
-            Button {
-              visible: root.mainName !== ""
-              text: "Identify"
-              fontSize: Style.font.caption
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              horizontalPadding: Style.spacing.sm
-              verticalPadding: Style.spacing.controlPaddingY
-              bordered: true
-              onClicked: root.identify()
             }
 
             Repeater {
