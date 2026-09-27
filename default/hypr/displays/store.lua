@@ -186,6 +186,14 @@ M.encode = function(value)
 end
 M.decode = decode
 
+-- Only displays that can be recognised again are remembered: externals by
+-- their EDID description, the internal panel by its connector. An external
+-- that reported no EDID (a glitch the kernel can have after a display comes
+-- back on) is kept for the session only, not as a new display for good.
+local function lasting(key)
+  return key:sub(1, 5) == "desc:" or model.is_internal(key)
+end
+
 local function point(p)
   local x, y = type(p) == "table" and math.tointeger(p[1]), type(p) == "table" and math.tointeger(p[2])
   if x and y then
@@ -211,7 +219,7 @@ local function sanitize(data)
   table.sort(keys)
   for _, key in ipairs(keys) do
     local display = displays[key]
-    if type(display) == "table" and type(display.selector) == "string" then
+    if lasting(key) and type(display) == "table" and type(display.selector) == "string" then
       local size = point(display.size)
       local scale = type(display.scale) == "number" and model.snap_scale(display.scale)
       local transform = math.tointeger(display.transform or 0)
@@ -229,9 +237,12 @@ local function sanitize(data)
     local positions = {}
     local valid = type(layout) == "table" and type(layout.positions) == "table" and next(layout.positions) ~= nil
     for key, p in pairs(valid and layout.positions or {}) do
-      positions[key] = type(key) == "string" and point(p) or nil
-      valid = valid and positions[key] ~= nil
+      if type(key) ~= "string" or lasting(key) then
+        positions[key] = type(key) == "string" and point(p) or nil
+        valid = valid and positions[key] ~= nil
+      end
     end
+    valid = valid and next(positions) ~= nil
     if valid then
       state.layouts[#state.layouts + 1] = { positions = positions }
     end
@@ -269,7 +280,7 @@ end
 -- crash or a full disk can't leave half a file behind.
 function M.save(state, path)
   path = path or M.path
-  local text = M.encode(state)
+  local text = M.encode(sanitize(state))
   if text == last_written then
     return false
   end

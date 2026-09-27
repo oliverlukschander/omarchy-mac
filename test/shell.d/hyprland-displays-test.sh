@@ -227,16 +227,16 @@ assert(store.decode('{"a": 1} trailing') == nil, "trailing garbage is rejected")
 local clean = store.sanitize({
   version = 1,
   displays = {
-    ok = { selector = "eDP-1", size = { 1, 1 }, scale = 2.0000001 },
-    bad = { selector = 3 },
-    tiny = { selector = "a", size = { 10, 10 }, scale = 0.004 },
-    turned = { selector = "b", size = { 10, 10 }, scale = 1, transform = 9 },
-    fractional = { selector = "c", size = { 10.5, 10 }, scale = 1 },
+    ["desc:ok"] = { selector = "eDP-1", size = { 1, 1 }, scale = 2.0000001 },
+    ["desc:bad"] = { selector = 3 },
+    ["desc:tiny"] = { selector = "a", size = { 10, 10 }, scale = 0.004 },
+    ["desc:turned"] = { selector = "b", size = { 10, 10 }, scale = 1, transform = 9 },
+    ["desc:fractional"] = { selector = "c", size = { 10.5, 10 }, scale = 1 },
   },
-  layouts = { { positions = { a = { 0, 0 } } }, { positions = { a = "x" } }, {}, { positions = { a = { 0.5, 0 } } } },
+  layouts = { { positions = { ["desc:a"] = { 0, 0 } } }, { positions = { ["desc:a"] = "x" } }, {}, { positions = { ["desc:a"] = { 0.5, 0 } } } },
 })
-assert(clean.displays.ok and not clean.displays.bad, "invalid display records are dropped")
-assert(not clean.displays.tiny and not clean.displays.turned and not clean.displays.fractional, "out-of-range values are dropped")
+assert(clean.displays["desc:ok"] and not clean.displays["desc:bad"], "invalid display records are dropped")
+assert(not clean.displays["desc:tiny"] and not clean.displays["desc:turned"] and not clean.displays["desc:fractional"], "out-of-range values are dropped")
 local blocks = store.sanitize({
   version = 1,
   displays = {
@@ -245,13 +245,26 @@ local blocks = store.sanitize({
     c = { selector = "c", size = { 1, 1 }, scale = 1, block = 9999 },
   },
 }).displays
-assert(blocks.a.block == 1 and blocks.b.block == nil and blocks.c.block == nil, "duplicate or wild blocks are handed out again")
+assert(blocks.a == nil, "a display known only by a non-internal connector is not remembered")
+local named = store.sanitize({
+  version = 1,
+  displays = {
+    ["desc:A"] = { selector = "desc:A", size = { 1, 1 }, scale = 1, block = 1 },
+    ["desc:B"] = { selector = "desc:B", size = { 1, 1 }, scale = 1, block = 1 },
+    ["desc:C"] = { selector = "desc:C", size = { 1, 1 }, scale = 1, block = 9999 },
+    ["USB-1"] = { selector = "USB-1", size = { 1, 1 }, scale = 1, block = 2 },
+  },
+  layouts = { { positions = { ["eDP-1"] = { 0, 0 }, ["USB-1"] = { 5, 0 } } }, { positions = { ["USB-1"] = { 0, 0 } } } },
+})
+assert(named.displays["desc:A"].block == 1 and named.displays["desc:B"].block == nil and named.displays["desc:C"].block == nil, "duplicate or wild blocks are handed out again")
+assert(named.displays["USB-1"] == nil, "an external without an EDID is not remembered as a new display")
+assert(#named.layouts == 1 and named.layouts[1].positions["USB-1"] == nil, "nor its place in a layout")
 local kept = store.sanitize(store.decode(store.encode({
   version = 1, factor = 1.07, main = "desc:X",
-  displays = { x = { selector = "desc:X", size = { 1, 1 }, scale = 1, tuned = true } },
+  displays = { ["desc:X"] = { selector = "desc:X", size = { 1, 1 }, scale = 1, tuned = true } },
 })))
-assert(kept.factor == 1.07 and kept.main == "desc:X" and kept.displays.x.tuned == true, "factor, main and tuning are kept")
-assert(clean.displays.ok.scale == 2, "stored scales snap to k/120")
+assert(kept.factor == 1.07 and kept.main == "desc:X" and kept.displays["desc:X"].tuned == true, "factor, main and tuning are kept")
+assert(clean.displays["desc:ok"].scale == 2, "stored scales snap to k/120")
 assert(#clean.layouts == 1, "invalid layouts are dropped")
 assert(#store.sanitize({ version = 99 }).layouts == 0, "unknown versions start fresh")
 
