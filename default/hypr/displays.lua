@@ -380,7 +380,7 @@ local function rescale(live, scales)
 end
 
 -- Give the display on connector `name` a new scale, snapped to a clean one.
--- Automatically (while no display is tuned by hand) every display keeps in
+-- Linked (while no display is tuned by hand), every display keeps in
 -- proportion to main: setting another display's scale moves main to match,
 -- and the others follow main. Tuned by hand (by_hand, or once any display
 -- is) a display other than main keeps its own scale, which also teaches the

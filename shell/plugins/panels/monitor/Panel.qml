@@ -32,9 +32,10 @@ Panel {
   // monitors, which hides the arrangement), and whether Identify is showing.
   property string mainName: ""
   property bool identifying: false
-  // With the display module and two or more displays on, scale is Automatic
-  // (every display in proportion to main) or Per display (each tuned by
-  // hand). The scale row is always for the display this panel opened on.
+  // With the display module and two or more displays on, scale is Linked
+  // displays (every display in proportion to main) or Per display (each
+  // tuned by hand). The scale row is always for the display this panel
+  // opened on.
   readonly property bool arranged: mainName !== "" && enabledDisplayCount > 1
   // Per display once the module has a display tuned by hand, or while the
   // user has picked it in this panel and not tuned anything yet.
@@ -258,7 +259,7 @@ Panel {
     function hide() { root.close() }
   }
 
-  // Automatic drops any hand tuning, so every display matches main again.
+  // Linked displays drops any hand tuning, so every display matches main again.
   // One action at a time; the last one asked for while another runs goes next.
   function run(command) {
     if (actionProc.running) {
@@ -873,7 +874,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
 
                 Repeater {
-                  model: [{ label: "Automatic", each: false }, { label: "Per display", each: true }]
+                  model: [{ label: "Linked displays", each: false }, { label: "Per display", each: true }]
 
                   Button {
                     required property var modelData
