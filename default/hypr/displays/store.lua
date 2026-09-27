@@ -1,7 +1,7 @@
 -- Remembered display state in ~/.local/state/omarchy/displays.json:
 --   displays: identity -> { selector, size = { w, h } in pixels, scale,
 --             transform, block (its workspaces are block * 10 + 1..10),
---             tuned (the user set its scale by hand) }
+--             tuned (the user set its scale by hand), connector (last seen on) }
 --   factor:   the learned desk factor (see model.DESK_FACTOR)
 --   main:     the display the user chose as main
 --   layouts:  arrangements the user made, most recent first,
@@ -227,7 +227,15 @@ local function sanitize(data)
       local block = math.tointeger(display.block)
       block = block and block >= 0 and block < 100 and not used[block] and block or nil
       if size and size[1] > 0 and size[2] > 0 and scale and scale >= 0.25 and scale <= 10 and transform and transform >= 0 and transform <= 7 then
-        state.displays[key] = { selector = display.selector, size = size, scale = scale, transform = transform, block = block, tuned = display.tuned == true or nil }
+        state.displays[key] = {
+          selector = display.selector,
+          connector = type(display.connector) == "string" and display.connector or nil,
+          size = size,
+          scale = scale,
+          transform = transform,
+          block = block,
+          tuned = display.tuned == true or nil,
+        }
         used[block or -1] = true
       end
     end

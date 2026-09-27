@@ -48,31 +48,60 @@ local generation = 0
 local pinned = {} -- identities whose workspace rules are registered
 local choosing = 0
 
--- HL.Monitor objects must not outlive the event that produced them, so only
--- plain copies are kept.
-local function read_live()
+-- Every display Hyprland lists, keyed by identity, including one that has no
+-- mode yet while it comes back on. HL.Monitor objects must not outlive the
+-- event that produced them, so only plain copies are kept.
+local function listed()
   local monitors = {}
   for _, monitor in ipairs(hl.get_monitors() or {}) do
-    if monitor.name and not model.is_virtual(monitor.name) and not monitor.is_mirror and (monitor.width or 0) > 0 and (monitor.scale or 0) > 0 then
+    if monitor.name and not model.is_virtual(monitor.name) and not monitor.is_mirror then
       monitors[#monitors + 1] = {
         name = monitor.name,
         description = monitor.description or "",
         serial = monitor.serial or "",
-        width = monitor.width,
-        height = monitor.height,
+        width = monitor.width or 0,
+        height = monitor.height or 0,
         x = monitor.x,
         y = monitor.y,
-        scale = model.snap_scale(monitor.scale),
+        scale = model.snap_scale(monitor.scale or 0),
         transform = monitor.transform or 0,
         physical = monitor.physical_width,
+        workspace = monitor.active_workspace and monitor.active_workspace.id,
       }
     end
   end
 
-  local live = {}
+  local result = {}
   for _, m in ipairs(model.identify(monitors)) do
-    m.w, m.h = model.logical_size(m.width, m.height, m.scale, m.transform)
-    live[m.key] = m
+    result[m.key] = m
+  end
+
+  -- An external that reports no EDID (the kernel can lose it when a display
+  -- comes back on) is taken for the known display last seen on that
+  -- connector, if that one isn't connected otherwise. Its rules go by
+  -- connector for the time being.
+  for _, m in ipairs(monitors) do
+    if m.description == "" and not model.is_internal(m.name) then
+      for known, display in pairs(state.displays) do
+        if display.connector == m.name and not result[known] then
+          result[m.key], m.key, m.borrowed = nil, known, true
+          result[known] = m
+          break
+        end
+      end
+    end
+  end
+  return result
+end
+
+-- The displays that are on and have a mode.
+local function read_live()
+  local live = {}
+  for key, m in pairs(listed()) do
+    if m.width > 0 and m.scale > 0 then
+      m.w, m.h = model.logical_size(m.width, m.height, m.scale, m.transform)
+      live[key] = m
+    end
   end
   return live
 end
@@ -114,11 +143,14 @@ local function register(present)
   end
   table.sort(batch)
 
+  -- A reset connector rule is now newer than every desc: rule, and would win
+  -- over them for a display that comes back on that port: send them again.
   -- plan() orders desc: rules first. Whenever anything is sent, the external
   -- connector rules go again last, so they stay newer than any desc: rule
   -- that also matches a display sharing its description.
+  local reset = #batch > 0
   for _, selector in ipairs(order) do
-    if not same(wanted[selector], registered[selector]) then
+    if (reset and selector:sub(1, 5) == "desc:") or not same(wanted[selector], registered[selector]) then
       batch[#batch + 1] = selector
     end
   end
@@ -182,32 +214,68 @@ local function pin(key)
   end
 end
 
--- The workspaces of a display that's gone wait on main until it's back;
--- Hyprland itself puts them on whichever display it lists first.
-local function park(present)
+-- Windows of a display that's gone come over to main's active workspace,
+-- and go home when the display is back unless they were moved meanwhile.
+-- What was moved is kept in a runtime file, so a reload in between (the
+-- monitor watcher reloads when a display comes back) doesn't lose it.
+local returns_path = (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/omarchy-displays-returns.json"
+
+local function rehome(present)
   local main = model.main(present)
   if not main then
     return
   end
-  -- A display Hyprland still lists isn't gone, even one that has no mode yet
-  -- while it comes back on.
-  local listed = {}
-  for _, monitor in ipairs(hl.get_monitors() or {}) do
-    if monitor.name and not model.is_virtual(monitor.name) then
-      listed[#listed + 1] = { name = monitor.name, description = monitor.description or "", serial = monitor.serial or "" }
-    end
-  end
-  local home = {}
-  for _, m in ipairs(model.identify(listed)) do
-    local display = state.displays[m.key]
+
+  local home, main_workspace = {}, nil
+  for key, m in pairs(listed()) do
+    local display = state.displays[key]
     if display and display.block then
       home[display.block] = true
     end
+    if key == main then
+      main_workspace = m.workspace
+    end
   end
-  for _, workspace in ipairs(hl.get_workspaces() or {}) do
-    local id = workspace.id
-    if id and id > 0 and not workspace.special and not home[(id - 1) // 10] and workspace.monitor and workspace.monitor.name ~= present[main].name then
-      hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(id), monitor = present[main].name }))
+
+  local file = io.open(returns_path, "r")
+  local returns = file and store.decode(file:read("a")) or {}
+  if file then
+    file:close()
+  end
+
+  local seen, changed = {}, false
+  for _, window in ipairs(hl.get_windows() or {}) do
+    local address, id = window.address, window.workspace and window.workspace.id
+    local back = address and returns[address]
+    if address and id and id > 0 then
+      seen[address] = true
+      local target
+      if not home[(id - 1) // 10] and main_workspace and id ~= main_workspace then
+        returns[address] = { home = back and back.home or id, put = main_workspace }
+        target = main_workspace
+      elseif back and id == back.put and home[(back.home - 1) // 10] then
+        returns[address] = nil
+        target = back.home
+      elseif back and id ~= back.put then
+        returns[address] = nil
+      end
+      changed = changed or returns[address] ~= back
+      if target then
+        hl.dispatch(hl.dsp.window.move({ window = "address:" .. address, workspace = tostring(target), follow = false }))
+      end
+    end
+  end
+
+  for address in pairs(returns) do
+    if not seen[address] then
+      returns[address], changed = nil, true
+    end
+  end
+  if changed then
+    file = io.open(returns_path, "w")
+    if file then
+      file:write(store.encode(returns))
+      file:close()
     end
   end
 end
@@ -246,7 +314,10 @@ local function commit(present, made_by_user)
   for key, rect in pairs(present) do
     targets[rect.name] = rect
     local display = state.displays[key] or {}
-    display.selector, display.size, display.scale, display.transform = rect.selector, { rect.width, rect.height }, rect.scale, rect.transform
+    if not rect.borrowed then
+      display.selector = rect.selector
+    end
+    display.connector, display.size, display.scale, display.transform = rect.name, { rect.width, rect.height }, rect.scale, rect.transform
     display.block = display.block or free_block(key, has_panel)
     state.displays[key] = display
     pin(key)
@@ -260,7 +331,7 @@ local function commit(present, made_by_user)
   if register(present) then
     settle()
   end
-  park(present)
+  rehome(present)
 end
 
 -- The displays that are on after some change size: from where we put them,

@@ -12,7 +12,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 run_lua() {
   local home="$1"
   mkdir -p "$home/.local/state/omarchy/toggles/hypr"
-  HOME="$home" XDG_STATE_HOME="$home/.local/state" OMARCHY_PATH="$ROOT" lua -
+  HOME="$home" XDG_STATE_HOME="$home/.local/state" XDG_RUNTIME_DIR="$home" OMARCHY_PATH="$ROOT" lua -
 }
 
 model_output=$(run_lua "$tmpdir/model" 2>&1 <<'LUA'
@@ -297,7 +297,7 @@ require("default.hypr.helpers")
 local H
 
 local function reset_hyprland()
-  H = { outputs = {}, order = {}, rules = {}, workspaces = {}, workspace_rules = {}, dispatched = {}, submap = "", handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
+  H = { outputs = {}, order = {}, rules = {}, windows = {}, workspace_rules = {}, dispatched = {}, submap = "", handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
 end
 reset_hyprland()
 
@@ -325,7 +325,7 @@ local function rule_for(o)
 end
 
 local function view(o)
-  return { name = o.name, description = o.description, serial = o.serial, width = o.width, height = o.height, x = o.x, y = o.y, scale = o.scale, transform = o.transform or 0, physical_width = o.physical or 0 }
+  return { name = o.name, description = o.description, serial = o.serial, width = o.width, height = o.height, x = o.x, y = o.y, scale = o.scale, transform = o.transform or 0, physical_width = o.physical or 0, active_workspace = o.active and { id = o.active } }
 end
 
 local function fire(event, ...)
@@ -463,10 +463,10 @@ hl = {
   get_current_submap = function()
     return H.submap
   end,
-  get_workspaces = function()
+  get_windows = function()
     local list = {}
-    for id, name in pairs(H.workspaces) do
-      list[#list + 1] = { id = id, special = false, monitor = { name = name } }
+    for address, id in pairs(H.windows) do
+      list[#list + 1] = { address = address, workspace = { id = id } }
     end
     return list
   end,
@@ -477,14 +477,11 @@ hl = {
     submap = function(name)
       return { submap = name }
     end,
-    workspace = {
-      move = function(args)
-        H.workspaces[tonumber(args.workspace)] = args.monitor
-        return { workspace_move = args }
-      end,
-    },
     window = {
       move = function(args)
+        if args.window then
+          H.windows[args.window:gsub("^address:", "")] = tonumber(args.workspace)
+        end
         return { move = args }
       end,
     },
@@ -804,26 +801,45 @@ timers[1]()
 eq(H.submap, "display", "an earlier timer doesn't cut a new SUPER+D short")
 settle()
 
--- Workspaces of a display that's gone wait on main. Hyprland parks them on
--- the display it lists first, here the Dell; the module moves them to the
--- laptop, and leaves the other displays' own workspaces alone.
-H.workspaces = { [1] = "eDP-1", [11] = "USB-4", [13] = "USB-4", [41] = "USB-4" }
+-- Windows of a display that's gone come over to main's active workspace
+-- and go home when it's back; a window moved meanwhile stays where it is.
+-- The other displays' windows stay put.
+H.outputs["eDP-1"].active = 2
+H.windows = { lap = 1, a = 11, b = 13, dell = 41 }
 disconnect("USB-2")
 settle()
-eq(H.workspaces[11] .. " " .. H.workspaces[13], "eDP-1 eDP-1", "the BenQ's workspaces wait on main")
-eq(H.workspaces[41], "USB-4", "the Dell keeps its own")
+eq(H.windows.a .. " " .. H.windows.b, "2 2", "the BenQ's windows come over to the laptop's active workspace")
+eq(H.windows.lap .. " " .. H.windows.dell, "1 41", "the other displays' windows stay put")
+H.windows.b = 3
 connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
 settle()
+eq(H.windows.a, 11, "back on the BenQ when it returns")
+eq(H.windows.b, 3, "a window moved meanwhile stays where it was put")
 
 -- A display that comes back on without a mode yet (0x0) is not gone: its
--- workspaces stay home instead of being parked on main again.
-H.workspaces = { [1] = "eDP-1", [11] = "USB-2" }
+-- windows stay home.
+H.windows = { a = 11 }
 H.outputs["USB-2"].width, H.outputs["USB-2"].height = 0, 0
 fire("monitor.layout_changed")
-eq(H.workspaces[11], "USB-2", "a display still coming up keeps its workspaces")
+eq(H.windows.a, 11, "a display still coming up keeps its windows")
 H.outputs["USB-2"].width, H.outputs["USB-2"].height = 2560, 1440
 settle()
-H.workspaces = {}
+
+-- An external that comes back without an EDID, on the connector it was last
+-- seen on, is still recognised: same place, same workspaces.
+H.windows = { a = 11 }
+disconnect("USB-2")
+settle()
+connect("USB-2", "", "", 2560, 1440, 1)
+settle()
+eq(H.windows.a, 11, "the BenQ without its EDID gets its windows back")
+assert(omarchy_displays.status():find("desc:" .. benq, 1, true), "and is known as the BenQ")
+disconnect("USB-2")
+settle()
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
+settle()
+eq(H.outputs["USB-2"].scale, 1.6, "with its EDID back, the BenQ keeps its scale")
+H.windows = {}
 
 -- Scale: a display seen for the first time matches main; SUPER+/ on main
 -- takes the others along, a display tuned by hand keeps its scale and
@@ -877,15 +893,16 @@ omarchy_displays.set_main("USB-2")
 settle()
 eq(store.load().main, "desc:" .. benq, "the chosen main is stored")
 assert(omarchy_displays.status():find("USB%-2%) [^\n]* main"), "the BenQ is main now")
-H.workspaces = { [3] = "USB-4" }
+H.outputs["USB-2"].active = 11
+H.windows = { lap = 3 }
 disconnect("eDP-1")
 settle()
-eq(H.workspaces[3], "USB-2", "the laptop's workspaces wait on the chosen main")
+eq(H.windows.lap, 11, "the laptop's windows come over to the chosen main")
 connect("eDP-1", "", "", 3456, 2160, 2, 346)
 settle()
 omarchy_displays.set_main("eDP-1")
 settle()
-H.workspaces = {}
+H.windows = {}
 
 -- A display that isn't connected is still pinned at load, so its windows go
 -- home the moment it connects.
