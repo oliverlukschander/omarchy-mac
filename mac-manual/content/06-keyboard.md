@@ -31,13 +31,13 @@ On Macs with an ambient light sensor, the keyboard backlight follows the room: l
 
 The built-in trackpad scrolls naturally, as in macOS, and tap-to-click is off, because a palm brushing the trackpad while typing would otherwise click. Click by pressing the trackpad. Change either in `~/.config/hypr/input.lua`, as [Keyboard, mouse, trackpad](https://omarchy.org/manual/keyboard-mouse-trackpad/) describes; a value you set yourself is kept.
 
-Swipe sideways with three fingers to move between workspaces, as in macOS, including empty ones: swiping past the last workspace opens the next one. A three-finger sideways gesture of your own in `~/.config/hypr/input.lua` takes its place. To turn the swipe off, add this line to `~/.config/hypr/input.lua`:
+Swipe sideways with three fingers to move between workspaces, as in macOS, including empty ones: swiping past the last workspace opens the next one. While each screen has its own workspaces, the swipe stays on the screen's workspaces in use. A three-finger sideways gesture of your own in `~/.config/hypr/input.lua` takes its place. To turn the swipe off, add this line to `~/.config/hypr/input.lua`:
 
 ```lua
 omarchy_workspace_gesture = false
 ```
 
-Stepping into empty workspaces is a Mac default for every workspace swipe, yours included. To go back to Hyprland's own stepping, add this line to `~/.config/hypr/input.lua`:
+Stepping into empty workspaces is a Mac default for every workspace swipe, yours included, unless each screen has its own workspaces. To go back to Hyprland's own stepping, add this line to `~/.config/hypr/input.lua`:
 
 ```lua
 hl.config({ gestures = { workspace_swipe_use_r = false } })
