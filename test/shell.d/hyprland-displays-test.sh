@@ -61,6 +61,18 @@ eq(model.step_scale(2, 1, 3456, 2160), 3, "step up on the MacBook panel")
 eq(model.step_scale(1.6, -1, 2560, 1440), 1.25, "step down on a 1440p display")
 eq(model.step_scale(4, 1, 2560, 1440), 4, "step up stops at the top")
 
+-- Scale follows main, from EDID sizes (Oliver's MacBook and BenQ).
+local panel = { key = "eDP-1", width = 3456, height = 2160, physical = 346, scale = 3 }
+local desk_benq = { key = "desc:" .. benq, width = 2560, height = 1440, physical = 600, scale = 1 }
+eq(model.derived_scale(desk_benq, panel, model.DESK_FACTOR), 1.6, "the BenQ matches the panel at 3 with the default desk factor")
+eq(model.derived_scale(desk_benq, panel, 1), 1.25, "without the desk factor it would be matched by ppi alone")
+eq(model.derived_scale({ key = "x", width = 1920, height = 1080, physical = 0 }, panel, 1), nil, "no EDID size, no derived scale")
+desk_benq.scale = 1.25
+local factor = model.desk_factor(desk_benq, panel)
+assert(factor > 0.95 and factor < 1.05, "tuning the BenQ to 1.25 teaches a factor of about 1")
+eq(model.derived_scale(desk_benq, panel, factor), 1.25, "and the learned factor reproduces the tuned scale")
+eq(model.nearest_clean(1.49, 2560, 1440), 1.6, "nearest clean scale in either direction")
+
 -- Main and numbering.
 local desk = {
   ["desc:" .. benq] = { x = 0, y = 0, w = 1600, h = 900 },
@@ -292,7 +304,7 @@ local function rule_for(o)
 end
 
 local function view(o)
-  return { name = o.name, description = o.description, serial = o.serial, width = o.width, height = o.height, x = o.x, y = o.y, scale = o.scale, transform = o.transform or 0 }
+  return { name = o.name, description = o.description, serial = o.serial, width = o.width, height = o.height, x = o.x, y = o.y, scale = o.scale, transform = o.transform or 0, physical_width = o.physical or 0 }
 end
 
 local function fire(event, ...)
@@ -471,8 +483,8 @@ local function load_config(after)
   frame()
 end
 
-local function connect(name, description, serial, width, height, auto_scale)
-  local o = { name = name, description = description, serial = serial, width = width, height = height, auto_scale = auto_scale or 1 }
+local function connect(name, description, serial, width, height, auto_scale, physical)
+  local o = { name = name, description = description, serial = serial, width = width, height = height, auto_scale = auto_scale or 1, physical = physical }
   H.outputs[name] = o
   H.order[#H.order + 1] = name
   apply_rule(o)
@@ -776,6 +788,33 @@ eq(H.workspaces[41], "USB-4", "the Dell keeps its own")
 connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
 settle()
 H.workspaces = {}
+
+-- Scale: a display seen for the first time matches main; SUPER+/ on main
+-- takes the others along, a display tuned by hand keeps its scale and
+-- teaches the desk factor, and SUPER+CTRL+/ matches everything to main again.
+H.outputs["eDP-1"].physical = 346
+connect("USB-7", "SAM Odyssey G7 H4ZR", "H4ZR", 2560, 1440, 1, 597)
+settle()
+eq(H.outputs["USB-7"].scale, 1.6, "a new 27-inch 1440p matches the panel at 3")
+H.focused = "eDP-1"
+omarchy_displays.step_scale(-1)
+settle()
+eq(H.outputs["eDP-1"].scale, 2, "the panel steps down to 2")
+eq(H.outputs["USB-7"].scale, 1, "the Odyssey follows main down")
+H.focused = "USB-7"
+omarchy_displays.step_scale(1)
+settle()
+eq(H.outputs["USB-7"].scale, 1.25, "the Odyssey is tuned by hand")
+H.focused = "eDP-1"
+omarchy_displays.step_scale(1)
+settle()
+eq(H.outputs["eDP-1"].scale, 3, "the panel steps back up to 3")
+eq(H.outputs["USB-7"].scale, 1.25, "a hand-tuned display keeps its scale when main changes")
+omarchy_displays.match_all()
+settle()
+eq(H.outputs["USB-7"].scale, 2, "match all keeps the tuned proportion: 1.25 at 2 becomes 2 at 3")
+disconnect("USB-7")
+settle()
 
 -- A display that isn't connected is still pinned at load, so its windows go
 -- home the moment it connects.

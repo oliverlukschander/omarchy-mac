@@ -130,6 +130,57 @@ function M.step_scale(current, direction, width, height)
   return options[math.max(1, math.min(#options, nearest + direction))]
 end
 
+-- Scale follows main: a display gets the clean scale that shows things the
+-- same size as main does, measured in logical pixels per inch. Between the
+-- laptop panel and a desk monitor, which is viewed from further away, the
+-- desk factor applies: the desk monitor's logical ppi over the panel's. It
+-- starts where macOS does, things about 15% larger on the desk monitor, and
+-- is learned from the user's own adjustments.
+M.DESK_FACTOR = 0.86
+
+local function ppi(d)
+  if (d.physical or 0) > 0 then
+    return d.width / (d.physical / 25.4)
+  end
+end
+
+-- The clean scale nearest to scale, in either direction.
+function M.nearest_clean(scale, width, height)
+  local g = gcd(width * 120, height * 120)
+  local k = math.floor(scale * 120 + 0.5)
+  for step = 0, g do
+    for _, candidate in ipairs({ k - step, k + step }) do
+      if candidate >= 30 and candidate <= g and g % candidate == 0 then
+        return candidate / 120
+      end
+    end
+  end
+end
+
+-- The scale for display d that matches main, or nil without EDID sizes.
+function M.derived_scale(d, main, factor)
+  local dppi, mppi = ppi(d), ppi(main)
+  if not dppi or not mppi then
+    return nil
+  end
+  local target = mppi / main.scale
+  if M.is_internal(d.key) ~= M.is_internal(main.key) then
+    target = M.is_internal(main.key) and target * factor or target / factor
+  end
+  return M.nearest_clean(dppi / target, d.width, d.height)
+end
+
+-- The desk factor that d, just tuned by the user, implies against main, or
+-- nil when they're the same kind of display or sizes are unknown.
+function M.desk_factor(d, main)
+  local dppi, mppi = ppi(d), ppi(main)
+  if not dppi or not mppi or M.is_internal(d.key) == M.is_internal(main.key) then
+    return nil
+  end
+  local ratio = (dppi / d.scale) / (mppi / main.scale)
+  return M.is_internal(main.key) and ratio or 1 / ratio
+end
+
 local function overlaps(a, b)
   return a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h
 end

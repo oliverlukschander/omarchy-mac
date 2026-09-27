@@ -125,10 +125,14 @@ for index = 1, 5 do
 end
 
 -- Scaling goes through the display arrangement, so the display keeps its
--- place and its neighbours follow the new size.
+-- place and its neighbours follow the new size. The main display sets the
+-- size for the others.
 o.bind("SUPER + SLASH", "Monitor scaling up", function()
   require("default.hypr.displays").step_scale(1)
 end)
 o.bind("SUPER + ALT + SLASH", "Monitor scaling down", function()
   require("default.hypr.displays").step_scale(-1)
+end)
+o.bind("SUPER + CTRL + SLASH", "Match all monitors to the main one", function()
+  require("default.hypr.displays").match_all()
 end)

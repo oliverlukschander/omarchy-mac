@@ -63,6 +63,7 @@ local function read_live()
         y = monitor.y,
         scale = model.snap_scale(monitor.scale),
         transform = monitor.transform or 0,
+        physical = monitor.physical_width,
       }
     end
   end
@@ -265,15 +266,18 @@ local function reflowed(live, sizes)
   return present
 end
 
--- A display seen before comes back at its remembered scale and rotation.
-local function remembered(m)
+-- A display seen before comes back at its remembered scale and rotation; one
+-- seen for the first time gets the scale that matches main.
+local function remembered(m, main)
   local display = state.displays[m.key]
-  if not display or (display.scale == m.scale and display.transform == m.transform) then
+  local scale = display and display.scale or (main and model.derived_scale(m, main, state.factor or model.DESK_FACTOR))
+  local transform = display and display.transform or m.transform
+  if not scale or (scale == m.scale and transform == m.transform) then
     return m
   end
   local rect = model.moved(m, m.x, m.y)
-  rect.scale, rect.transform = display.scale, display.transform
-  rect.w, rect.h = model.logical_size(m.width, m.height, rect.scale, rect.transform)
+  rect.scale, rect.transform = scale, transform
+  rect.w, rect.h = model.logical_size(m.width, m.height, scale, transform)
   return rect
 end
 
@@ -302,7 +306,7 @@ local function sync(live)
   table.sort(fresh)
   for _, key in ipairs(fresh) do
     if not present[key] then
-      local m = remembered(live[key])
+      local m = remembered(live[key], present[anchor])
       present[key] = model.moved(m, model.place_joining(present, key, m.w, m.h, state.layouts))
     end
   end
@@ -357,31 +361,73 @@ function check()
   end
 end
 
+-- Apply new scales (key -> scale) to displays that are on. Each keeps its
+-- place and the neighbours follow the new sizes.
+local function rescale(live, scales)
+  local sizes = {}
+  for key, m in pairs(live) do
+    local scale = scales[key] or m.scale
+    sizes[key] = {}
+    sizes[key].w, sizes[key].h = model.logical_size(m.width, m.height, scale, m.transform)
+  end
+  local present = reflowed(live, sizes)
+  for key, rect in pairs(present) do
+    rect.scale, rect.w, rect.h = scales[key] or rect.scale, sizes[key].w, sizes[key].h
+  end
+  commit(present, true)
+end
+
 -- Give the display on connector `name` a new scale, snapped to a clean one.
--- It keeps its place and the neighbours follow its new size. Used by SUPER+/
--- and by omarchy-hyprland-monitor-scaling for the Monitor panel.
+-- Main is the size reference: the others follow it, except the ones tuned
+-- by hand. Any other display is tuned by hand, which also teaches the desk
+-- factor. Used by SUPER+/ and by omarchy-hyprland-monitor-scaling for the
+-- Monitor panel.
 function M.set_scale(name, scale)
   if mirrored or type(scale) ~= "number" or scale < 0.25 then
     return
   end
 
   local live = read_live()
+  local main = model.main(live)
   for key, m in pairs(live) do
     if m.name == name then
-      scale = model.clean_scale(scale, m.width, m.height)
-      local sizes = {}
-      for k, other in pairs(live) do
-        sizes[k] = { w = other.w, h = other.h }
-      end
-      local w, h = model.logical_size(m.width, m.height, scale, m.transform)
-      sizes[key] = { w = w, h = h }
+      local scales = { [key] = model.clean_scale(scale, m.width, m.height) }
+      local tuned = model.moved(m, m.x, m.y)
+      tuned.scale = scales[key]
 
-      local present = reflowed(live, sizes)
-      present[key].scale, present[key].w, present[key].h = scale, w, h
-      commit(present, true)
+      if key == main then
+        for other, d in pairs(live) do
+          if other ~= key and not state.displays[other].tuned then
+            scales[other] = model.derived_scale(d, tuned, state.factor or model.DESK_FACTOR)
+          end
+        end
+      else
+        state.displays[key].tuned = true
+        state.factor = model.desk_factor(tuned, live[main]) or state.factor
+      end
+
+      rescale(live, scales)
       return
     end
   end
+end
+
+-- SUPER+CTRL+/: every display back to the scale that matches main, dropping
+-- the hand-tuned ones.
+function M.match_all()
+  if mirrored then
+    return
+  end
+  local live = read_live()
+  local main = model.main(live)
+  local scales = {}
+  for key, m in pairs(live) do
+    state.displays[key].tuned = nil
+    if key ~= main then
+      scales[key] = model.derived_scale(m, live[main], state.factor or model.DESK_FACTOR)
+    end
+  end
+  rescale(live, scales)
 end
 
 -- SUPER+/ and SUPER+ALT+/: the next clean scale up or down for the focused
