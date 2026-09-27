@@ -29,6 +29,7 @@ require("default.hypr.qconsole")
 require("default.hypr.monitor-removal")
 require("default.hypr.input")
 require("default.hypr.windows")
+require("default.hypr.displays")
 
 -- A platform package's settings (hypr/settings/*.lua), loaded
 -- after Omarchy's defaults so they replace them, and before the theme and the
