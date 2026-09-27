@@ -26,6 +26,7 @@ end
 hl = {
   dsp = proxy(),
   on = function() end,
+  define_submap = function() end,
   unbind = function(keys)
     print("unbind\t" .. keys)
   end,
