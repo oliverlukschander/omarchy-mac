@@ -352,7 +352,8 @@ Panel {
     if (!name) return
     if (enabled && root.enabledDisplayCount <= 1) return
 
-    run(["hyprctl", "keyword", "monitor", name + (enabled ? ",disable" : ",preferred,auto,auto")])
+    var command = Model.displayToggleCommand(name, enabled)
+    if (command) run(command)
   }
 
   // by_hand tunes the display on its own (the Per display rows).
