@@ -30,10 +30,10 @@ for workspace = 1, 10 do
     hl.dispatch(hl.dsp.focus({ workspace = displays().slot(workspace) }))
   end)
   o.bind("SUPER + SHIFT + " .. key, "Move window to workspace " .. workspace, function()
-    hl.dispatch(hl.dsp.window.move({ workspace = displays().slot(workspace) }))
+    hl.dispatch(hl.dsp.window.move({ workspace = displays().slot(workspace, true) }))
   end)
   o.bind("SUPER + SHIFT + ALT + " .. key, "Move window silently to workspace " .. workspace, function()
-    hl.dispatch(hl.dsp.window.move({ workspace = displays().slot(workspace), follow = false }))
+    hl.dispatch(hl.dsp.window.move({ workspace = displays().slot(workspace, true), follow = false }))
   end)
 end
 

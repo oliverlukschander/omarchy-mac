@@ -491,9 +491,12 @@ function M.place(number, side, reference)
   return true
 end
 
--- The workspace id of slot n on the display that has focus (SUPER+1..0).
-function M.slot(n)
-  local active = hl.get_active_monitor()
+-- The workspace id of slot n on the display that has focus (SUPER+1..0),
+-- or, for_window, on the display the focused window is on: SUPER+SHIFT+N
+-- moves the window within its own display even when the pointer has left it.
+function M.slot(n, for_window)
+  local window = for_window and hl.get_active_window()
+  local active = window and window.monitor or hl.get_active_monitor()
   local rect = active and targets[active.name]
   local display = rect and state.displays[rect.key]
   return tostring((display and display.block or 0) * 10 + n)

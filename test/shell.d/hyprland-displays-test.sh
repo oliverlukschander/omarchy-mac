@@ -422,6 +422,9 @@ hl = {
     end
     return list
   end,
+  get_active_window = function()
+    return H.window and { monitor = view(H.outputs[H.window]) }
+  end,
   get_active_monitor = function()
     return H.outputs[H.focused] and view(H.outputs[H.focused])
   end,
@@ -766,6 +769,9 @@ H.focused = "USB-2"
 eq(omarchy_displays.slot(3), "13", "SUPER+3 on the BenQ is its third slot")
 H.focused = "eDP-1"
 eq(omarchy_displays.slot(10), "10", "SUPER+0 on the laptop is workspace 10, as before")
+H.window = "USB-2"
+eq(omarchy_displays.slot(1, true), "11", "SUPER+SHIFT+1 uses the display the window is on, not the one under the pointer")
+H.window = nil
 H.dispatched = {}
 
 -- SUPER+D, then a number: D1 is the leftmost display.
