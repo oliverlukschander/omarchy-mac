@@ -94,5 +94,11 @@ for index = 1, 5 do
   o.bind("SUPER + ALT + code:" .. tostring(index + 9), "Switch to group window " .. index, hl.dsp.group.active({ index = index }))
 end
 
-o.bind("SUPER + SLASH", "Monitor scaling up", "omarchy-hyprland-monitor-scaling up")
-o.bind("SUPER + ALT + SLASH", "Monitor scaling down", "omarchy-hyprland-monitor-scaling down")
+-- Scaling goes through the display arrangement, so the display keeps its
+-- place and its neighbours follow the new size.
+o.bind("SUPER + SLASH", "Monitor scaling up", function()
+  require("default.hypr.displays").step_scale(1)
+end)
+o.bind("SUPER + ALT + SLASH", "Monitor scaling down", function()
+  require("default.hypr.displays").step_scale(-1)
+end)

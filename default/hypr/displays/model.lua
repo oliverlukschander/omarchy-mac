@@ -1,0 +1,487 @@
+-- Display arrangement model: identity, numbering and layout math.
+-- Pure functions over plain tables with no hl calls, so the logic runs under a
+-- stock Lua interpreter in test/shell.d/hyprland-displays-test.sh.
+--
+-- A rect is { x, y, w, h } in Hyprland's logical pixels: positions as Hyprland
+-- reports them, sizes being the pixel mode divided by the scale. A layout maps
+-- display keys to rects.
+
+local M = {}
+
+M.SCALE_STEPS = { 1, 1.25, 1.6, 2, 3, 4 }
+
+local function sorted_keys(map)
+  local keys = {}
+  for key in pairs(map) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys)
+  return keys
+end
+
+M.sorted_keys = sorted_keys
+
+function M.is_internal(name)
+  return name:match("^eDP%-") ~= nil or name:match("^LVDS%-") ~= nil or name:match("^DSI%-") ~= nil
+end
+
+-- FALLBACK and HEADLESS-n are Hyprland's synthetic outputs, never a display.
+function M.is_virtual(name)
+  return name == "FALLBACK" or name:match("^HEADLESS") ~= nil
+end
+
+local function usable_serial(serial)
+  local value = (serial or ""):lower():gsub("%s", ""):gsub("^0x", "")
+  return value ~= "" and value:match("^0+$") == nil
+end
+
+-- Identity (concept §5) is the EDID description, which ends in the serial
+-- string, so the same monitor keeps its identity on any port. The Asahi
+-- internal panel has no EDID and goes by connector. The connector joins an
+-- external's identity only when its serial is unusable or two connected
+-- displays share a description; desc: can't tell those apart, so they are
+-- selected by connector. Sets m.key and m.selector on each monitor.
+function M.identify(monitors)
+  local count = {}
+  for _, m in ipairs(monitors) do
+    count[m.description] = (count[m.description] or 0) + 1
+  end
+
+  for _, m in ipairs(monitors) do
+    if m.description == "" then
+      m.key, m.selector = m.name, m.name
+    elseif usable_serial(m.serial) and count[m.description] == 1 then
+      m.key = "desc:" .. m.description
+      m.selector = m.key
+    else
+      m.key = "desc:" .. m.description .. "@" .. m.name
+      m.selector = m.name
+    end
+  end
+
+  return monitors
+end
+
+-- A rule for a display that is off must not catch another monitor: desc:
+-- selectors are unique per identity and the internal connector is always the
+-- panel, but a USB-n or DP-n connector takes whatever is plugged in next.
+function M.safe_when_absent(selector)
+  return selector:sub(1, 5) == "desc:" or M.is_internal(selector)
+end
+
+-- Hyprland reports scales as float32 (1.6000000238418579); every valid scale
+-- is a multiple of 1/120.
+function M.snap_scale(scale)
+  return math.floor(scale * 120 + 0.5) / 120
+end
+
+function M.logical_size(width, height, scale, transform)
+  if (transform or 0) % 2 == 1 then
+    width, height = height, width
+  end
+  return math.floor(width / scale + 0.5), math.floor(height / scale + 0.5)
+end
+
+local function gcd(a, b)
+  while b ~= 0 do
+    a, b = b, a % b
+  end
+  return a
+end
+
+-- Hyprland only accepts scales that divide the mode into whole logical pixels
+-- in 1/120 steps, so clean scales are divisors of gcd(w*120, h*120). Rounds up
+-- to the nearest clean value, like omarchy-hyprland-monitor-scaling.
+function M.clean_scale(scale, width, height)
+  local g = gcd(math.floor(width) * 120, math.floor(height) * 120)
+  local k = math.min(math.floor(scale * 120 + 0.5), g)
+  while g % k ~= 0 do
+    k = k + 1
+  end
+  return k / 120
+end
+
+-- The next clean preset up (direction 1) or down (-1) from the current scale.
+function M.step_scale(current, direction, width, height)
+  local options, seen = {}, {}
+  for _, preset in ipairs(M.SCALE_STEPS) do
+    local scale = M.clean_scale(preset, width, height)
+    if not seen[scale] then
+      seen[scale] = true
+      options[#options + 1] = scale
+    end
+  end
+  table.sort(options)
+
+  local nearest, distance = 1, math.huge
+  for index, scale in ipairs(options) do
+    if math.abs(scale - current) < distance then
+      nearest, distance = index, math.abs(scale - current)
+    end
+  end
+
+  return options[math.max(1, math.min(#options, nearest + direction))]
+end
+
+local function overlaps(a, b)
+  return a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h
+end
+
+local function fits(layout, rect, except)
+  for key, other in pairs(layout) do
+    if key ~= except and overlaps(rect, other) then
+      return false, key
+    end
+  end
+  return true
+end
+
+M.fits = fits
+
+-- Main is a role (concept §6): the internal panel while it's on, otherwise the
+-- leftmost display.
+function M.main(layout)
+  local best
+  for _, key in ipairs(sorted_keys(layout)) do
+    if M.is_internal(key) then
+      return key
+    end
+    local rect, top = layout[key], best and layout[best]
+    if not best or rect.x < top.x or (rect.x == top.x and rect.y < top.y) then
+      best = key
+    end
+  end
+  return best
+end
+
+-- Display numbers D1..Dn run left to right, ties top to bottom (concept §3).
+function M.numbering(layout)
+  local keys = sorted_keys(layout)
+  table.sort(keys, function(a, b)
+    local ra, rb = layout[a], layout[b]
+    if ra.x ~= rb.x then
+      return ra.x < rb.x
+    end
+    if ra.y ~= rb.y then
+      return ra.y < rb.y
+    end
+    return a < b
+  end)
+  return keys
+end
+
+-- Where a w×h display goes against rect p. Left and right align the far edge
+-- ("end", so bottoms are flush), "start" or "center"; above and below do the
+-- same horizontally. "offset" keeps a fixed distance between the start edges.
+function M.attach(p, side, align, offset, w, h)
+  local x, y
+  if side == "right" then
+    x = p.x + p.w
+  elseif side == "left" then
+    x = p.x - w
+  elseif side == "below" then
+    y = p.y + p.h
+  else
+    y = p.y - h
+  end
+
+  local horizontal = side == "left" or side == "right"
+  local start, span, size = horizontal and p.y or p.x, horizontal and p.h or p.w, horizontal and h or w
+  local along
+  if align == "end" then
+    along = start + span - size
+  elseif align == "start" then
+    along = start
+  elseif align == "center" then
+    along = start + (span - size) // 2
+  else
+    along = start + offset
+  end
+
+  if horizontal then
+    y = along
+  else
+    x = along
+  end
+  return x, y
+end
+
+-- How q sits against p when they share an edge: the side, then the alignment
+-- that attach() would reproduce. Nil when they don't touch.
+local function relation(p, q)
+  local side
+  if q.x == p.x + p.w and q.y < p.y + p.h and p.y < q.y + q.h then
+    side = "right"
+  elseif q.x + q.w == p.x and q.y < p.y + p.h and p.y < q.y + q.h then
+    side = "left"
+  elseif q.y == p.y + p.h and q.x < p.x + p.w and p.x < q.x + q.w then
+    side = "below"
+  elseif q.y + q.h == p.y and q.x < p.x + p.w and p.x < q.x + q.w then
+    side = "above"
+  else
+    return nil
+  end
+
+  local horizontal = side == "left" or side == "right"
+  local ps, pe = horizontal and p.y or p.x, horizontal and p.y + p.h or p.x + p.w
+  local qs, qe = horizontal and q.y or q.x, horizontal and q.y + q.h or q.x + q.w
+  local flush_end, flush_start, centred = qe == pe, qs == ps, math.abs((qs + qe) - (ps + pe)) <= 1
+
+  -- Beside each other, bottoms flush is the default; stacked, centred is.
+  if horizontal then
+    if flush_end then
+      return side, "end"
+    elseif flush_start then
+      return side, "start"
+    elseif centred then
+      return side, "center"
+    end
+  else
+    if centred then
+      return side, "center"
+    elseif flush_start then
+      return side, "start"
+    elseif flush_end then
+      return side, "end"
+    end
+  end
+  return side, "offset", qs - ps
+end
+
+local function copy_rect(rect, w, h)
+  return { x = rect.x, y = rect.y, w = w or rect.w, h = h or rect.h }
+end
+
+-- Left to right in the old order, touching, bottoms flush with main's. Always
+-- valid, so reflow falls back to it when keeping every relation would overlap.
+local function strip(old, sizes, main)
+  local order = M.numbering(old)
+  local new, index = {}, 1
+  for i, key in ipairs(order) do
+    if key == main then
+      index = i
+    end
+  end
+
+  local function size(key)
+    local s = sizes[key]
+    return s and s.w or old[key].w, s and s.h or old[key].h
+  end
+
+  local mw, mh = size(main)
+  local bottom = old[main].y + mh
+  new[main] = copy_rect(old[main], mw, mh)
+
+  local x = old[main].x + mw
+  for i = index + 1, #order do
+    local w, h = size(order[i])
+    new[order[i]] = { x = x, y = bottom - h, w = w, h = h }
+    x = x + w
+  end
+
+  x = old[main].x
+  for i = index - 1, 1, -1 do
+    local w, h = size(order[i])
+    x = x - w
+    new[order[i]] = { x = x, y = bottom - h, w = w, h = h }
+  end
+
+  return new
+end
+
+-- Re-seat displays after some change size (a scale step, a rotation). Main
+-- keeps its spot, and every other display keeps the side and alignment it had
+-- against the neighbour that links it to main. A display touching nothing
+-- keeps its position. sizes maps keys to their new { w, h }.
+function M.reflow(old, sizes)
+  local main = M.main(old)
+  if not main then
+    return {}
+  end
+
+  local function size(key)
+    local s = sizes[key]
+    return s and s.w or old[key].w, s and s.h or old[key].h
+  end
+
+  local new, queue, head = {}, { main }, 1
+  new[main] = copy_rect(old[main], size(main))
+
+  while queue[head] do
+    local p = queue[head]
+    head = head + 1
+    for _, q in ipairs(sorted_keys(old)) do
+      if not new[q] then
+        local side, align, offset = relation(old[p], old[q])
+        if side then
+          local w, h = size(q)
+          local x, y = M.attach(new[p], side, align, offset, w, h)
+          new[q] = { x = x, y = y, w = w, h = h }
+          queue[#queue + 1] = q
+        end
+      end
+    end
+  end
+
+  for key, rect in pairs(old) do
+    if not new[key] then
+      new[key] = copy_rect(rect, size(key))
+    end
+  end
+
+  for key, rect in pairs(new) do
+    if not fits(new, rect, key) then
+      return strip(old, sizes, main)
+    end
+  end
+  return new
+end
+
+-- A display seen for the first time goes right of main, bottom-aligned
+-- (concept §6), and past anything already standing there.
+function M.place_new(layout, w, h)
+  local main = M.main(layout)
+  if not main then
+    return 0, 0
+  end
+
+  local rect = { w = w, h = h }
+  rect.x, rect.y = M.attach(layout[main], "right", "end", nil, w, h)
+  while true do
+    local ok, blocker = fits(layout, rect)
+    if ok then
+      return rect.x, rect.y
+    end
+    rect.x = layout[blocker].x + layout[blocker].w
+  end
+end
+
+-- Where display `key` (w×h) lands if it connects while `layout` is on:
+--   1. the most recently used stored layout holding it and everything on,
+--      shifted so main stays where it is;
+--   2. else the most recent one sharing any display that's on, shifted the
+--      same way on that display;
+--   3. else the default spot.
+-- A candidate that would overlap something on is skipped. With nothing on,
+-- the most recent stored position is used as is.
+function M.place_joining(layout, key, w, h, layouts)
+  local main = M.main(layout)
+  if not main then
+    for _, stored in ipairs(layouts) do
+      local p = stored.positions[key]
+      if p then
+        return p[1], p[2]
+      end
+    end
+    return 0, 0
+  end
+
+  for pass = 1, 2 do
+    for _, stored in ipairs(layouts) do
+      local positions = stored.positions
+      if positions[key] then
+        local anchor
+        if pass == 1 then
+          anchor = main
+          for other in pairs(layout) do
+            if not positions[other] then
+              anchor = nil
+              break
+            end
+          end
+        elseif positions[main] then
+          anchor = main
+        else
+          for _, other in ipairs(sorted_keys(layout)) do
+            if positions[other] then
+              anchor = other
+              break
+            end
+          end
+        end
+
+        if anchor then
+          local rect = {
+            x = positions[key][1] + layout[anchor].x - positions[anchor][1],
+            y = positions[key][2] + layout[anchor].y - positions[anchor][2],
+            w = w,
+            h = h,
+          }
+          if fits(layout, rect) then
+            return rect.x, rect.y
+          end
+        end
+      end
+    end
+  end
+
+  return M.place_new(layout, w, h)
+end
+
+local function signature(positions)
+  return table.concat(sorted_keys(positions), "\n")
+end
+
+-- Store the arrangement of the displays that are on as the most recently used
+-- layout for that set, replacing the older entry for the same set.
+function M.remember(layouts, layout, limit)
+  local positions = {}
+  for key, rect in pairs(layout) do
+    positions[key] = { rect.x, rect.y }
+  end
+
+  local sig = signature(positions)
+  local result = { { positions = positions } }
+  for _, stored in ipairs(layouts) do
+    if #result >= limit then
+      break
+    end
+    if signature(stored.positions) ~= sig then
+      result[#result + 1] = stored
+    end
+  end
+  return result
+end
+
+-- The complete rule set: every display that's on where it is, and every known
+-- display that's off at the spot it would take if it connected now. present
+-- maps keys to rects carrying selector, scale, transform and description;
+-- known is the store's per-display record. desc: rules come first, so a
+-- connector rule for a display that shares its description stays the newest
+-- match.
+function M.plan(present, known, layouts)
+  local rules = {}
+  for key, rect in pairs(present) do
+    rules[#rules + 1] = { key = key, selector = rect.selector, x = rect.x, y = rect.y, scale = rect.scale, transform = rect.transform }
+  end
+
+  for _, key in ipairs(sorted_keys(known)) do
+    local display = known[key]
+    local selector = display.selector
+    if not present[key] and selector and M.safe_when_absent(selector) and display.size and display.scale then
+      local shadows = false
+      for _, rect in pairs(present) do
+        if selector:sub(1, 5) == "desc:" and ("desc:" .. (rect.description or "")):sub(1, #selector) == selector then
+          shadows = true
+        end
+      end
+
+      if not shadows then
+        local w, h = M.logical_size(display.size[1], display.size[2], display.scale, display.transform)
+        local x, y = M.place_joining(present, key, w, h, layouts)
+        rules[#rules + 1] = { key = key, selector = selector, x = x, y = y, scale = display.scale, transform = display.transform or 0 }
+      end
+    end
+  end
+
+  table.sort(rules, function(a, b)
+    local ad, bd = a.selector:sub(1, 5) == "desc:", b.selector:sub(1, 5) == "desc:"
+    if ad ~= bd then
+      return ad
+    end
+    return a.selector < b.selector
+  end)
+  return rules
+end
+
+return M
