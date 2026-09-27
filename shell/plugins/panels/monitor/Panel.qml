@@ -33,10 +33,12 @@ Panel {
   property string mainName: ""
   property bool identifying: false
   // With the display module and two or more displays, scale is Automatic
-  // (set main's, the others follow) or Per display (each tuned by hand).
+  // (set main's, the others follow) or Per display (each tuned by hand). The
+  // scale row is always for the display this panel opened on.
   readonly property bool arranged: mainName !== "" && displays.length > 1
   property bool perDisplay: false
-  readonly property string scaleTarget: arranged ? mainName : focusedMonitor
+  readonly property var panelMonitor: button.QsWindow.window ? Hyprland.monitorFor(button.QsWindow.window.screen) : null
+  readonly property string scaleTarget: arranged && panelMonitor ? panelMonitor.name : focusedMonitor
 
   // Carry sub-notch touchpad deltas between wheel events.
   property real wheelAccumulator: 0
@@ -273,6 +275,8 @@ Panel {
   function refresh() {
     if (!stateProc.running) stateProc.running = true
     if (!mainProc.running) mainProc.running = true
+    // Quickshell's monitor list doesn't follow scale changes by itself.
+    Hyprland.refreshMonitors()
   }
 
   function setBrightness(value) {
