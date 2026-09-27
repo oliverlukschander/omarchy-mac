@@ -264,7 +264,7 @@ require("default.hypr.helpers")
 local H
 
 local function reset_hyprland()
-  H = { outputs = {}, order = {}, rules = {}, workspace_rules = {}, dispatched = {}, submap = "", handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
+  H = { outputs = {}, order = {}, rules = {}, workspaces = {}, workspace_rules = {}, dispatched = {}, submap = "", handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
 end
 reset_hyprland()
 
@@ -427,6 +427,13 @@ hl = {
   get_current_submap = function()
     return H.submap
   end,
+  get_workspaces = function()
+    local list = {}
+    for id, name in pairs(H.workspaces) do
+      list[#list + 1] = { id = id, special = false, monitor = { name = name } }
+    end
+    return list
+  end,
   dsp = {
     focus = function(args)
       return { focus = args }
@@ -434,6 +441,12 @@ hl = {
     submap = function(name)
       return { submap = name }
     end,
+    workspace = {
+      move = function(args)
+        H.workspaces[tonumber(args.workspace)] = args.monitor
+        return { workspace_move = args }
+      end,
+    },
     window = {
       move = function(args)
         return { move = args }
@@ -751,6 +764,18 @@ omarchy_displays.choose_display()
 timers[1]()
 eq(H.submap, "display", "an earlier timer doesn't cut a new SUPER+D short")
 settle()
+
+-- Workspaces of a display that's gone wait on main. Hyprland parks them on
+-- the display it lists first, here the Dell; the module moves them to the
+-- laptop, and leaves the other displays' own workspaces alone.
+H.workspaces = { [1] = "eDP-1", [11] = "USB-4", [13] = "USB-4", [41] = "USB-4" }
+disconnect("USB-2")
+settle()
+eq(H.workspaces[11] .. " " .. H.workspaces[13], "eDP-1 eDP-1", "the BenQ's workspaces wait on main")
+eq(H.workspaces[41], "USB-4", "the Dell keeps its own")
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
+settle()
+H.workspaces = {}
 
 -- A display that isn't connected is still pinned at load, so its windows go
 -- home the moment it connects.

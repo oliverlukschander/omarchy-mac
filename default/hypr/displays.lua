@@ -180,6 +180,25 @@ local function pin(key)
   end
 end
 
+-- The workspaces of a display that's gone wait on main until it's back;
+-- Hyprland itself puts them on whichever display it lists first.
+local function park(present)
+  local main = model.main(present)
+  if not main then
+    return
+  end
+  local home = {}
+  for key in pairs(present) do
+    home[state.displays[key].block] = true
+  end
+  for _, workspace in ipairs(hl.get_workspaces() or {}) do
+    local id = workspace.id
+    if id > 0 and not workspace.special and not home[(id - 1) // 10] and workspace.monitor and workspace.monitor.name ~= present[main].name then
+      hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(id), monitor = present[main].name }))
+    end
+  end
+end
+
 local check
 
 local function settle()
@@ -228,6 +247,7 @@ local function commit(present, made_by_user)
   if register(present) then
     settle()
   end
+  park(present)
 end
 
 -- The displays that are on after some change size: from where we put them,

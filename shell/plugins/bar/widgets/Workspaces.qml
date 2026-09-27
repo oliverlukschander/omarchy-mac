@@ -9,8 +9,9 @@ import qs.Ui
 // The workspaces of the display this bar sits on. Each display owns ten ids
 // (default/hypr/displays.lua): its block in displays.json, keyed by EDID
 // description, or by connector for the internal panel. Slots 1-5 always
-// show, 6-10 while in use. With two or more displays, the display's number
-// (D1 is the leftmost) comes first.
+// show, 6-10 while in use. Workspaces of a display that's gone wait on main
+// and follow, marked with a dot. With two or more displays, the display's
+// number (D1 is the leftmost) comes first.
 BarWidget {
   id: root
   moduleName: "omarchy.workspaces"
@@ -51,7 +52,15 @@ BarWidget {
     for (var slot = 1; slot <= 10; slot++) {
       if (slot <= 5 || workspaceById(base + slot) !== null) ids.push(base + slot)
     }
-    return ids
+
+    var parked = []
+    var values = Hyprland.workspaces.values
+    for (var i = 0; i < values.length; i++) {
+      var id = values[i].id
+      if (id > 0 && (id <= base || id > base + 10) && values[i].monitor === monitor) parked.push(id)
+    }
+    parked.sort(function(left, right) { return left - right })
+    return ids.concat(parked)
   }
 
   function focusWorkspace(id) {
@@ -110,7 +119,9 @@ BarWidget {
         readonly property bool shown: root.monitor !== null && root.monitor.activeWorkspace !== null && root.monitor.activeWorkspace.id === modelData
 
         bar: root.bar
-        text: shown ? "󱓻" : String(modelData % 10)
+        readonly property bool parked: Math.floor((modelData - 1) / 10) !== root.block()
+
+        text: shown ? "\uDB85\uDCFB" : (parked ? "\u00B7" : "") + String(modelData % 10)
         // Full for workspaces with windows and the one in front on the
         // focused display; clearly dimmed for empty slots.
         opacity: occupied || (shown && root.monitor.focused) ? 1 : (shown ? 0.7 : 0.35)
