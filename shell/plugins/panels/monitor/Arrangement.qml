@@ -12,6 +12,7 @@ Item {
 
   property var bar
   property string mainName: ""
+  property bool dragging: false
 
   implicitHeight: Style.space(130)
 
@@ -55,6 +56,7 @@ Item {
     for (var i = 0; i < displays.length; i++) {
       if (i !== index) others.push(displays[i])
     }
+    if (others.length === 0) return
     var spot = Model.snapPosition(others, {
       x: Math.round((viewX - originX) / zoom + bounds.x),
       y: Math.round((viewY - originY) / zoom + bounds.y),
@@ -104,7 +106,10 @@ Item {
         anchors.fill: parent
         cursorShape: Qt.OpenHandCursor
         drag.target: tile
+        onPressed: root.dragging = true
+        onCanceled: root.dragging = false
         onReleased: {
+          root.dragging = false
           if (tile.x !== tile.homeX || tile.y !== tile.homeY) root.drop(tile.index, tile.x, tile.y)
           tile.x = Qt.binding(function() { return tile.homeX })
           tile.y = Qt.binding(function() { return tile.homeY })

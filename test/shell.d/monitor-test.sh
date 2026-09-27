@@ -7,6 +7,16 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 run_node_test <<'JS'
 const monitor = requireFromRoot('shell/plugins/panels/monitor/Model.js')
 
+assertEqual(
+  monitor.closestScaleIndex(['1', '1.25', '1.6', '2', '3', '4'], 2.4, 3456, 2160),
+  3,
+  'monitor highlights the nearest preset for a derived scale'
+)
+assertEqual(
+  monitor.closestScaleIndex(['1', '1.25', '1.6', '2', '3', '4'], 3, 3456, 2160),
+  4,
+  'monitor highlights an exact preset'
+)
 const laptop = { x: 0, y: 0, w: 1152, h: 720 }
 assertDeepEqual(
   monitor.snapPosition([laptop], { x: -1500, y: -150, w: 1600, h: 900 }),

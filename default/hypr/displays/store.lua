@@ -199,7 +199,7 @@ local function sanitize(data)
   if type(data) ~= "table" or data.version ~= 1 then
     return state
   end
-  if type(data.factor) == "number" and data.factor > 0.3 and data.factor < 3 then
+  if type(data.factor) == "number" and data.factor > model.FACTOR_MIN and data.factor < model.FACTOR_MAX then
     state.factor = data.factor
   end
   state.main = type(data.main) == "string" and data.main or nil

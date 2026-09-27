@@ -267,11 +267,12 @@ local function reflowed(live, sizes)
   return present
 end
 
--- A display seen before comes back at its remembered scale and rotation; one
--- seen for the first time gets the scale that matches main.
+-- A display comes back at its remembered rotation. Its scale matches main
+-- unless it was tuned by hand; without EDID sizes it keeps its last scale.
 local function remembered(m, main)
   local display = state.displays[m.key]
-  local scale = display and display.scale or (main and model.derived_scale(m, main, state.factor or model.DESK_FACTOR))
+  local derived = main and not (display and display.tuned) and model.derived_scale(m, main, state.factor or model.DESK_FACTOR)
+  local scale = derived or (display and display.scale)
   local transform = display and display.transform or m.transform
   if not scale or (scale == m.scale and transform == m.transform) then
     return m
@@ -426,15 +427,13 @@ function M.match_all()
     return
   end
   local live = read_live()
-  local main = model.main(live)
-  local scales = {}
-  for key, m in pairs(live) do
+  for key in pairs(live) do
     state.displays[key].tuned = nil
-    if key ~= main then
-      scales[key] = model.derived_scale(m, live[main], state.factor or model.DESK_FACTOR)
-    end
   end
-  rescale(live, scales)
+  local main = model.main(live)
+  if main then
+    M.set_scale(live[main].name, live[main].scale)
+  end
 end
 
 -- SUPER+/ and SUPER+ALT+/: the next clean scale up or down for the focused
@@ -539,7 +538,6 @@ function M.set_main(name)
   end
   state.main = rect.key
   model.preferred = rect.key
-  registered = {}
   commit(current(), false)
 end
 

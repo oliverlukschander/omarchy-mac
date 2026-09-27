@@ -52,6 +52,24 @@ function matchingScaleIndex(scales, currentScale, width, height) {
   return bestIndex
 }
 
+// The preset matching the current scale, or, for a scale between presets
+// (derived from the main display), the nearest one.
+function closestScaleIndex(scales, currentScale, width, height) {
+  var index = matchingScaleIndex(scales, currentScale, width, height)
+  var current = Number(currentScale)
+  if (index >= 0 || !Array.isArray(scales) || !isFinite(current)) return index
+
+  var bestDistance = Infinity
+  for (var i = 0; i < scales.length; i++) {
+    var distance = Math.abs(Number(cleanScale(scales[i], width, height)) - current)
+    if (distance < bestDistance) {
+      index = i
+      bestDistance = distance
+    }
+  }
+  return index
+}
+
 function availableScales(scales, width, height) {
   if (!Array.isArray(scales) || Number(width) <= 0 || Number(height) <= 0) return scales || []
 
@@ -161,6 +179,7 @@ if (typeof module !== "undefined") {
     normalizeScale: normalizeScale,
     cleanScale: cleanScale,
     matchingScaleIndex: matchingScaleIndex,
+    closestScaleIndex: closestScaleIndex,
     availableScales: availableScales,
     brightnessName: brightnessName,
     parseDisplays: parseDisplays,

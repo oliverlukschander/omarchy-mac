@@ -120,14 +120,21 @@ function M.step_scale(current, direction, width, height)
   end
   table.sort(options)
 
-  local nearest, distance = 1, math.huge
-  for index, scale in ipairs(options) do
-    if math.abs(scale - current) < distance then
-      nearest, distance = index, math.abs(scale - current)
+  -- Derived scales sit between presets; step to the next one past current.
+  if direction > 0 then
+    for _, scale in ipairs(options) do
+      if scale > current + 1e-6 then
+        return scale
+      end
+    end
+    return options[#options]
+  end
+  for index = #options, 1, -1 do
+    if options[index] < current - 1e-6 then
+      return options[index]
     end
   end
-
-  return options[math.max(1, math.min(#options, nearest + direction))]
+  return options[1]
 end
 
 -- Scale follows main: a display gets the clean scale that shows things the
@@ -137,11 +144,23 @@ end
 -- starts where macOS does, things about 15% larger on the desk monitor, and
 -- is learned from the user's own adjustments.
 M.DESK_FACTOR = 0.86
+M.FACTOR_MIN, M.FACTOR_MAX = 0.3, 3
 
+-- Pixels per inch from the EDID width. A size outside what real displays
+-- have (TVs and projectors often report 0 or nonsense) counts as unknown.
 local function ppi(d)
-  if (d.physical or 0) > 0 then
-    return d.width / (d.physical / 25.4)
+  local value = (d.physical or 0) > 0 and d.width / (d.physical / 25.4)
+  if value and value >= 50 and value <= 600 then
+    return value
   end
+end
+
+-- How much larger things are meant to look on d than on main.
+local function ratio(d, main, factor)
+  if M.is_internal(d.key) == M.is_internal(main.key) then
+    return 1
+  end
+  return M.is_internal(main.key) and factor or 1 / factor
 end
 
 -- The clean scale nearest to scale, in either direction.
@@ -163,11 +182,7 @@ function M.derived_scale(d, main, factor)
   if not dppi or not mppi then
     return nil
   end
-  local target = mppi / main.scale
-  if M.is_internal(d.key) ~= M.is_internal(main.key) then
-    target = M.is_internal(main.key) and target * factor or target / factor
-  end
-  return M.nearest_clean(dppi / target, d.width, d.height)
+  return M.nearest_clean(dppi * main.scale / (mppi * ratio(d, main, factor)), d.width, d.height)
 end
 
 -- The main scale at which d would be derived at the scale it has, the
@@ -177,11 +192,7 @@ function M.main_scale_for(d, main, factor)
   if not dppi or not mppi then
     return nil
   end
-  local ratio = 1
-  if M.is_internal(d.key) ~= M.is_internal(main.key) then
-    ratio = M.is_internal(main.key) and factor or 1 / factor
-  end
-  return M.nearest_clean(d.scale * mppi * ratio / dppi, main.width, main.height)
+  return M.nearest_clean(d.scale * mppi * ratio(d, main, factor) / dppi, main.width, main.height)
 end
 
 -- The desk factor that d, just tuned by the user, implies against main, or
@@ -191,8 +202,11 @@ function M.desk_factor(d, main)
   if not dppi or not mppi or M.is_internal(d.key) == M.is_internal(main.key) then
     return nil
   end
-  local ratio = (dppi / d.scale) / (mppi / main.scale)
-  return M.is_internal(main.key) and ratio or 1 / ratio
+  local measured = (dppi / d.scale) / (mppi / main.scale)
+  local factor = M.is_internal(main.key) and measured or 1 / measured
+  if factor > M.FACTOR_MIN and factor < M.FACTOR_MAX then
+    return factor
+  end
 end
 
 local function overlaps(a, b)

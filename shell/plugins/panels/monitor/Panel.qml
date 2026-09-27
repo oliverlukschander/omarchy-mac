@@ -32,11 +32,16 @@ Panel {
   // monitors, which hides the arrangement), and whether Identify is showing.
   property string mainName: ""
   property bool identifying: false
-  // With the display module and two or more displays, scale is Automatic
-  // (set main's, the others follow) or Per display (each tuned by hand). The
-  // scale row is always for the display this panel opened on.
-  readonly property bool arranged: mainName !== "" && displays.length > 1
-  property bool perDisplay: false
+  // With the display module and two or more displays on, scale is Automatic
+  // (every display in proportion to main) or Per display (each tuned by
+  // hand). The scale row is always for the display this panel opened on.
+  readonly property bool arranged: mainName !== "" && enabledDisplayCount > 1
+  // Per display once the module has a display tuned by hand, or while the
+  // user has picked it in this panel and not tuned anything yet.
+  property bool tunedByHand: false
+  property bool perDisplayChosen: false
+  readonly property bool perDisplay: tunedByHand || perDisplayChosen
+  property var pendingAction: null
   readonly property var panelMonitor: button.QsWindow.window ? Hyprland.monitorFor(button.QsWindow.window.screen) : null
   readonly property string scaleTarget: arranged && panelMonitor ? panelMonitor.name : focusedMonitor
 
@@ -100,7 +105,7 @@ Panel {
     var list = []
     if (brightnessAvailable) list.push("brightness")
     list.push("textsize")
-    list.push("scale")
+    if (!(arranged && perDisplay)) list.push("scale")
     if (displays.length > 1) list.push("monitors")
     return list
   }
@@ -254,16 +259,23 @@ Panel {
   }
 
   // Automatic drops any hand tuning, so every display matches main again.
+  // One action at a time; the last one asked for while another runs goes next.
+  function run(command) {
+    if (actionProc.running) {
+      root.pendingAction = command
+      return
+    }
+    actionProc.command = command
+    actionProc.running = true
+  }
+
   function setScaleMode(each) {
-    root.perDisplay = each
-    if (each) return
-    actionProc.command = ["hyprctl", "eval", "omarchy_displays.match_all()"]
-    if (!actionProc.running) actionProc.running = true
+    root.perDisplayChosen = each
+    if (!each) run(["hyprctl", "eval", "omarchy_displays.match_all()"])
   }
 
   function setMain(name) {
-    actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_main(\"" + name + "\")"]
-    if (!actionProc.running) actionProc.running = true
+    run(["hyprctl", "eval", "omarchy_displays.set_main(\"" + name + "\")"])
   }
 
   // Shows each display's number big on that display for a moment.
@@ -313,7 +325,7 @@ Panel {
 
   function activeScaleIndex() {
     var display = displayNamed(scaleTarget)
-    return display ? Model.matchingScaleIndex(scaleValues, liveScale(display.name), display.width, display.height) : -1
+    return display ? Model.closestScaleIndex(scaleValues, liveScale(display.name), display.width, display.height) : -1
   }
 
   function effectiveScale(scale) {
@@ -339,18 +351,16 @@ Panel {
     if (!name) return
     if (enabled && root.enabledDisplayCount <= 1) return
 
-    actionProc.command = ["hyprctl", "keyword", "monitor", name + (enabled ? ",disable" : ",preferred,auto,auto")]
-    if (!actionProc.running) actionProc.running = true
+    run(["hyprctl", "keyword", "monitor", name + (enabled ? ",disable" : ",preferred,auto,auto")])
   }
 
   // by_hand tunes the display on its own (the Per display rows).
   function setScale(scale, name, byHand) {
     if (arranged) {
-      actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + (byHand ? ", true" : "") + ")"]
+      run(["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + (byHand ? ", true" : "") + ")"])
     } else {
-      actionProc.command = ["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale]
+      run(["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale])
     }
-    if (!actionProc.running) actionProc.running = true
   }
 
   // ---- Text size (shell base font + GTK text-scaling, via one CLI) ----
@@ -405,10 +415,12 @@ Panel {
         focusSection = "brightness"
         selectedIndex = -1
       } else {
-        focusSection = "scale"
-        selectedIndex = 0
+        focusSection = visibleSections.indexOf("scale") >= 0 ? "scale" : "textsize"
+        selectedIndex = focusSection === "scale" ? 0 : -1
       }
       cursorActive = false
+    } else {
+      perDisplayChosen = false
     }
   }
 
@@ -422,7 +434,8 @@ Panel {
   // rest. External brightness changes are reflected whenever the panel is open.
   Timer {
     interval: 5000
-    running: root.opened
+    // Not while a display is dragged: new monitor data rebuilds the tiles.
+    running: root.opened && !arrangement.dragging
     repeat: true
     onTriggered: root.refresh()
   }
@@ -475,13 +488,17 @@ Panel {
 
   Process {
     id: mainProc
-    command: ["hyprctl", "repl", "return omarchy_displays and (omarchy_displays.main_name() .. ' ' .. omarchy_displays.scale_mode()) or ''"]
+    // hyprctl prints something else for an empty answer, so "-" stands for
+    // "not managing monitors" and only a known display counts as main.
+    command: ["hyprctl", "repl", "return omarchy_displays and (omarchy_displays.main_name() .. ' ' .. omarchy_displays.scale_mode()) or '-'"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var fields = String(text || "").trim().split(" ")
-        root.mainName = fields[0] || ""
-        if (fields[1] === "each") root.perDisplay = true
+        var known = Hyprland.monitors.values.some(function(m) { return m.name === fields[0] })
+        root.mainName = known ? fields[0] : ""
+        root.tunedByHand = fields[1] === "each"
+        if (root.tunedByHand) root.perDisplayChosen = false
       }
     }
   }
@@ -528,7 +545,13 @@ Panel {
   Process {
     id: actionProc
     stdout: StdioCollector { waitForEnd: true }
-    onRunningChanged: if (!running) root.refresh()
+    onRunningChanged: {
+      if (running) return
+      var next = root.pendingAction
+      root.pendingAction = null
+      if (next) root.run(next)
+      else root.refresh()
+    }
   }
 
   // Applies text size via the CLI, which rewrites the shell override file;
@@ -927,7 +950,7 @@ Panel {
 
                 readonly property var display: root.displayNamed(modelData.name)
                 readonly property var values: display ? Model.availableScales(root.scalePresets, display.width, display.height) : []
-                readonly property int active: display ? Model.matchingScaleIndex(values, root.liveScale(modelData.name), display.width, display.height) : -1
+                readonly property int active: display ? Model.closestScaleIndex(values, root.liveScale(modelData.name), display.width, display.height) : -1
 
                 width: parent.width
                 spacing: Style.spacing.xs
@@ -990,7 +1013,7 @@ Panel {
 
               Button {
                 id: identifyButton
-                visible: root.mainName !== ""
+                visible: root.arranged
                 text: "Identify"
                 fontSize: Style.font.caption
                 foreground: root.bar.foreground
@@ -1008,7 +1031,7 @@ Panel {
             Arrangement {
               id: arrangement
               width: parent.width
-              visible: root.mainName !== ""
+              visible: root.arranged
               bar: root.bar
               mainName: root.mainName
             }
@@ -1106,13 +1129,13 @@ Panel {
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
-        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16) - (root.mainName !== "" ? Style.space(24) : 0)
+        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16) - (root.arranged ? Style.space(24) : 0)
         anchors.verticalCenter: parent.verticalCenter
       }
 
       Text {
         textFormat: Text.PlainText
-        visible: root.mainName !== ""
+        visible: root.arranged
         text: monitorRow.display.name === root.mainName ? "★" : "☆"
         color: root.bar.foreground
         font.family: root.bar.fontFamily

@@ -72,6 +72,9 @@ local factor = model.desk_factor(desk_benq, panel)
 assert(factor > 0.95 and factor < 1.05, "tuning the BenQ to 1.25 teaches a factor of about 1")
 eq(model.derived_scale(desk_benq, panel, factor), 1.25, "and the learned factor reproduces the tuned scale")
 eq(model.nearest_clean(1.49, 2560, 1440), 1.6, "nearest clean scale in either direction")
+eq(model.step_scale(2.4, 1, 3456, 2160), 3, "a step up from a derived scale goes to the next preset")
+eq(model.step_scale(2.4, -1, 3456, 2160), 2, "and a step down to the one below")
+eq(model.derived_scale({ key = "tv", width = 1920, height = 1080, physical = 16 }, panel, 1), nil, "an impossible EDID size counts as unknown")
 
 -- Main and numbering.
 local desk = {
@@ -243,6 +246,11 @@ local blocks = store.sanitize({
   },
 }).displays
 assert(blocks.a.block == 1 and blocks.b.block == nil and blocks.c.block == nil, "duplicate or wild blocks are handed out again")
+local kept = store.sanitize(store.decode(store.encode({
+  version = 1, factor = 1.07, main = "desc:X",
+  displays = { x = { selector = "desc:X", size = { 1, 1 }, scale = 1, tuned = true } },
+})))
+assert(kept.factor == 1.07 and kept.main == "desc:X" and kept.displays.x.tuned == true, "factor, main and tuning are kept")
 assert(clean.displays.ok.scale == 2, "stored scales snap to k/120")
 assert(#clean.layouts == 1, "invalid layouts are dropped")
 assert(#store.sanitize({ version = 99 }).layouts == 0, "unknown versions start fresh")
@@ -818,9 +826,15 @@ omarchy_displays.step_scale(1)
 settle()
 eq(H.outputs["eDP-1"].scale, 3, "the panel steps back up to 3")
 eq(H.outputs["USB-7"].scale, 1.25, "a hand-tuned display keeps its scale when main changes")
+eq(omarchy_displays.scale_mode(), "each", "with a display tuned by hand, scaling is per display")
+omarchy_displays.set_scale("USB-7", 1.6)
+settle()
+eq(H.outputs["eDP-1"].scale, 3, "per display, another display's scale leaves main alone")
+eq(omarchy_displays.main_name(), "eDP-1", "main is the panel")
 omarchy_displays.match_all()
 settle()
-eq(H.outputs["USB-7"].scale, 2, "match all keeps the tuned proportion: 1.25 at 2 becomes 2 at 3")
+eq(H.outputs["USB-7"].scale, 1.6, "match all keeps the proportion learned from tuning: 1.6 next to main at 3")
+eq(omarchy_displays.scale_mode(), "auto", "after match all, scaling is automatic again")
 disconnect("USB-7")
 settle()
 
