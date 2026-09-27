@@ -215,9 +215,12 @@ end
 
 local fits = M.fits
 
--- Main is a role: the internal panel while it's on, otherwise the leftmost
--- display.
+-- Main is a role: the display the user chose (M.preferred) while it's on,
+-- otherwise the internal panel, otherwise the leftmost display.
 function M.main(layout)
+  if M.preferred and layout[M.preferred] then
+    return M.preferred
+  end
   local best
   for _, key in ipairs(sorted_keys(layout)) do
     if M.is_internal(key) then

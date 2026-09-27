@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
+import Quickshell.Wayland
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model
@@ -26,6 +28,10 @@ Panel {
   property string monitorScale: ""
   property var displays: []
   property int enabledDisplayCount: 0
+  // The display module's main display ("" while the module isn't managing
+  // monitors, which hides the arrangement), and whether Identify is showing.
+  property string mainName: ""
+  property bool identifying: false
 
   // Carry sub-notch touchpad deltas between wheel events.
   property real wheelAccumulator: 0
@@ -229,8 +235,20 @@ Panel {
     function hide() { root.close() }
   }
 
+  function setMain(name) {
+    actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_main(\"" + name + "\")"]
+    if (!actionProc.running) actionProc.running = true
+  }
+
+  // Shows each display's number big on that display for a moment.
+  function identify() {
+    root.identifying = true
+    identifyTimer.restart()
+  }
+
   function refresh() {
     if (!stateProc.running) stateProc.running = true
+    if (!mainProc.running) mainProc.running = true
   }
 
   function setBrightness(value) {
@@ -425,6 +443,54 @@ Panel {
       if (running) return
       if (root.brightnessSetQueued) {
         root.setBrightness(root.pendingBrightnessPercent)
+      }
+    }
+  }
+
+  Process {
+    id: mainProc
+    command: ["hyprctl", "repl", "return omarchy_displays and omarchy_displays.main_name() or ''"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.mainName = String(text || "").trim()
+    }
+  }
+
+  Timer {
+    id: identifyTimer
+    interval: 2000
+    onTriggered: root.identifying = false
+  }
+
+  Variants {
+    model: root.identifying ? Quickshell.screens : []
+
+    PanelWindow {
+      required property var modelData
+
+      screen: modelData
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "transparent"
+      exclusionMode: ExclusionMode.Ignore
+      mask: Region {}
+      WlrLayershell.namespace: "omarchy-identify"
+      WlrLayershell.layer: WlrLayer.Overlay
+
+      Text {
+        readonly property var monitor: Hyprland.monitorFor(modelData)
+        anchors.centerIn: parent
+        text: {
+          for (var i = 0; i < arrangement.displays.length; i++) {
+            if (monitor && arrangement.displays[i].name === monitor.name) return "D" + (i + 1)
+          }
+          return ""
+        }
+        color: "white"
+        style: Text.Outline
+        styleColor: Qt.rgba(0, 0, 0, 0.6)
+        font.family: root.bar.fontFamily
+        font.pixelSize: parent.height / 4
+        font.bold: true
       }
     }
   }
@@ -807,6 +873,27 @@ Panel {
               fontFamily: root.bar.fontFamily
             }
 
+            // Drag a display to arrange; ★ in a row makes that display main.
+            Arrangement {
+              id: arrangement
+              width: parent.width
+              visible: root.mainName !== ""
+              bar: root.bar
+              mainName: root.mainName
+            }
+
+            Button {
+              visible: root.mainName !== ""
+              text: "Identify"
+              fontSize: Style.font.caption
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              horizontalPadding: Style.spacing.sm
+              verticalPadding: Style.spacing.controlPaddingY
+              bordered: true
+              onClicked: root.identify()
+            }
+
             Repeater {
               model: root.displays
 
@@ -874,6 +961,8 @@ Panel {
 
     Row {
       id: monitorInner
+      // Above the row's own click area, so the ★ gets its clicks.
+      z: 1
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -898,8 +987,26 @@ Panel {
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
-        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16)
+        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16) - (root.mainName !== "" ? Style.space(24) : 0)
         anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: root.mainName !== ""
+        text: monitorRow.display.name === root.mainName ? "★" : "☆"
+        color: root.bar.foreground
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.subtitle
+        width: Style.space(16)
+        horizontalAlignment: Text.AlignHCenter
+        anchors.verticalCenter: parent.verticalCenter
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.setMain(monitorRow.display.name)
+        }
       }
 
       Text {

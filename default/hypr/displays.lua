@@ -40,6 +40,7 @@ local internal_off = toggle_on("internal-monitor-clamshell") or toggle_on("inter
 local mirrored = toggle_on("internal-monitor-mirror")
 
 local state = store.load()
+model.preferred = state.main
 local targets = {} -- connector -> where we put that display, while it's on
 local registered = {} -- selector -> the rule last registered for it
 local settling = false -- our rules are registered but maybe not applied yet
@@ -504,6 +505,43 @@ function M.send_window(number)
   if key then
     hl.dispatch(hl.dsp.window.move({ monitor = present[key].name }))
   end
+end
+
+-- Move display `name` to x, y, where the Monitor panel's arrangement
+-- dropped it. Displays it leaves detached are seated again.
+function M.move(name, x, y)
+  local present = current()
+  local rect = targets[name]
+  if mirrored or not rect or type(x) ~= "number" or type(y) ~= "number" then
+    return false
+  end
+  local moved = model.moved(rect, math.floor(x), math.floor(y))
+  if not model.fits(present, moved, rect.key) then
+    return false
+  end
+  present[rect.key] = moved
+  commit(present, true)
+  return true
+end
+
+-- Make display `name` main: new displays go beside it, the workspaces of a
+-- display that's gone wait on it, and the others' scale follows it.
+function M.set_main(name)
+  local rect = targets[name]
+  if mirrored or not rect then
+    return
+  end
+  state.main = rect.key
+  model.preferred = rect.key
+  registered = {}
+  commit(current(), false)
+end
+
+-- The connector of the main display, for the Monitor panel.
+function M.main_name()
+  local present = current()
+  local main = model.main(present)
+  return main and present[main].name or ""
 end
 
 function M.status()

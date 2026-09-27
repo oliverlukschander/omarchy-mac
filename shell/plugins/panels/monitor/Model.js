@@ -111,6 +111,50 @@ function parseDisplays(raw) {
   }
 }
 
+// Where a display dragged in the arrangement lands: flush against the edge
+// of another display nearest to where it was dropped, never overlapping one.
+// Along that edge it snaps to the ends or the centre when it's close, and
+// otherwise keeps at least a pixel of edge shared. Rects are logical pixels
+// { x, y, w, h }; others must not be empty.
+function snapPosition(others, moving) {
+  function overlaps(a, b) {
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+  }
+
+  function along(start, span, size, dropped) {
+    var stops = [start, start + span - size, start + Math.floor((span - size) / 2)]
+    var reach = Math.max(span, size) * 0.1
+    for (var i = 0; i < stops.length; i++) {
+      if (Math.abs(dropped - stops[i]) <= reach) return stops[i]
+    }
+    return Math.max(start - size + 1, Math.min(dropped, start + span - 1))
+  }
+
+  var best = null
+  for (var i = 0; i < others.length; i++) {
+    var o = others[i]
+    var y = along(o.y, o.h, moving.h, moving.y)
+    var x = along(o.x, o.w, moving.w, moving.x)
+    var candidates = [
+      { x: o.x + o.w, y: y },
+      { x: o.x - moving.w, y: y },
+      { x: x, y: o.y + o.h },
+      { x: x, y: o.y - moving.h }
+    ]
+
+    for (var j = 0; j < candidates.length; j++) {
+      var c = { x: Math.round(candidates[j].x), y: Math.round(candidates[j].y), w: moving.w, h: moving.h }
+      var free = true
+      for (var k = 0; k < others.length; k++) {
+        if (overlaps(c, others[k])) free = false
+      }
+      var distance = Math.hypot(c.x - moving.x, c.y - moving.y)
+      if (free && (best === null || distance < best.distance)) best = { x: c.x, y: c.y, distance: distance }
+    }
+  }
+  return best ? { x: best.x, y: best.y } : { x: moving.x, y: moving.y }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clampBrightness: clampBrightness,
@@ -119,6 +163,7 @@ if (typeof module !== "undefined") {
     matchingScaleIndex: matchingScaleIndex,
     availableScales: availableScales,
     brightnessName: brightnessName,
-    parseDisplays: parseDisplays
+    parseDisplays: parseDisplays,
+    snapPosition: snapPosition
   }
 }

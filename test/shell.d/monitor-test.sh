@@ -7,6 +7,28 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 run_node_test <<'JS'
 const monitor = requireFromRoot('shell/plugins/panels/monitor/Model.js')
 
+const laptop = { x: 0, y: 0, w: 1152, h: 720 }
+assertDeepEqual(
+  monitor.snapPosition([laptop], { x: -1500, y: -150, w: 1600, h: 900 }),
+  { x: -1600, y: -180 },
+  'monitor arrangement snaps a display left of another with bottoms flush'
+)
+assertDeepEqual(
+  monitor.snapPosition([laptop], { x: 1200, y: 300, w: 1600, h: 900 }),
+  { x: 1152, y: 300 },
+  'monitor arrangement keeps a free offset along the edge'
+)
+assertDeepEqual(
+  monitor.snapPosition([laptop], { x: -200, y: -950, w: 1600, h: 900 }),
+  { x: -224, y: -900 },
+  'monitor arrangement centres a display dropped above another'
+)
+assertDeepEqual(
+  monitor.snapPosition([laptop, { x: 1152, y: 0, w: 1000, h: 720 }], { x: 1100, y: 0, w: 800, h: 600 }),
+  { x: 1100, y: -600 },
+  'monitor arrangement moves a display dropped onto others to the nearest free edge'
+)
+
 assertEqual(monitor.clampBrightness(0), 1, 'monitor clamps minimum brightness')
 assertEqual(monitor.clampBrightness(101), 100, 'monitor clamps maximum brightness')
 assertEqual(monitor.clampBrightness(42.4), 42, 'monitor rounds brightness')

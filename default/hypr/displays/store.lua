@@ -3,6 +3,7 @@
 --             transform, block (its workspaces are block * 10 + 1..10),
 --             tuned (the user set its scale by hand) }
 --   factor:   the learned desk factor (see model.DESK_FACTOR)
+--   main:     the display the user chose as main
 --   layouts:  arrangements the user made, most recent first,
 --             each { positions = { identity = { x, y } } }
 -- It is read and written with io.open and never require()'d: Hyprland watches
@@ -201,6 +202,7 @@ local function sanitize(data)
   if type(data.factor) == "number" and data.factor > 0.3 and data.factor < 3 then
     state.factor = data.factor
   end
+  state.main = type(data.main) == "string" and data.main or nil
 
   local displays, keys, used = type(data.displays) == "table" and data.displays or {}, {}, {}
   for key in pairs(displays) do

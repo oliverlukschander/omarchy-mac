@@ -816,6 +816,27 @@ eq(H.outputs["USB-7"].scale, 2, "match all keeps the tuned proportion: 1.25 at 2
 disconnect("USB-7")
 settle()
 
+-- The Monitor panel: dragging moves a display where it was dropped, and main
+-- can be chosen.
+eq(omarchy_displays.move("USB-2", 0, 0), false, "a drop onto another display is refused")
+assert(omarchy_displays.move("USB-2", -1600, 0), "a free spot is taken")
+settle()
+eq(pos("USB-2"), "-1600,0", "the BenQ is where it was dropped")
+eq(store.load().layouts[1].positions["desc:" .. benq][2], 0, "and that's remembered")
+omarchy_displays.set_main("USB-2")
+settle()
+eq(store.load().main, "desc:" .. benq, "the chosen main is stored")
+assert(omarchy_displays.status():find("USB%-2%) [^\n]* main"), "the BenQ is main now")
+H.workspaces = { [3] = "USB-4" }
+disconnect("eDP-1")
+settle()
+eq(H.workspaces[3], "USB-2", "the laptop's workspaces wait on the chosen main")
+connect("eDP-1", "", "", 3456, 2160, 2, 346)
+settle()
+omarchy_displays.set_main("eDP-1")
+settle()
+H.workspaces = {}
+
 -- A display that isn't connected is still pinned at load, so its windows go
 -- home the moment it connects.
 disconnect("USB-4")
