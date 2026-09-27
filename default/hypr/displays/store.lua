@@ -1,10 +1,12 @@
 -- Remembered display state in ~/.local/state/omarchy/displays.json:
 --   displays: identity -> { selector, size = { w, h } in pixels, scale, transform }
---   layouts:  most recently used first, each { positions = { identity = { x, y } } }
+--   layouts:  arrangements the user made, most recent first,
+--             each { positions = { identity = { x, y } } }
 -- It is read and written with io.open and never require()'d: Hyprland watches
 -- every required file and reloads the whole config when one changes.
 
 local paths = require("default.hypr.paths")
+local model = require("default.hypr.displays.model")
 
 local M = {}
 
@@ -180,11 +182,14 @@ M.encode = function(value)
 end
 M.decode = decode
 
-local function is_point(p)
-  return type(p) == "table" and type(p[1]) == "number" and type(p[2]) == "number"
+local function point(p)
+  local x, y = type(p) == "table" and math.tointeger(p[1]), type(p) == "table" and math.tointeger(p[2])
+  if x and y then
+    return { x, y }
+  end
 end
 
--- Drop anything this version can't use instead of failing on it later.
+-- Keep only what this version can use, so nothing malformed reaches a rule.
 local function sanitize(data)
   local state = { version = 1, displays = {}, layouts = {} }
   if type(data) ~= "table" or data.version ~= 1 then
@@ -192,22 +197,25 @@ local function sanitize(data)
   end
 
   for key, display in pairs(type(data.displays) == "table" and data.displays or {}) do
-    if type(key) == "string" and type(display) == "table" and type(display.selector) == "string"
-      and is_point(display.size) and type(display.scale) == "number" and display.scale > 0 then
-      display.scale = math.floor(display.scale * 120 + 0.5) / 120
-      display.transform = math.tointeger(display.transform) or 0
-      state.displays[key] = display
+    if type(key) == "string" and type(display) == "table" and type(display.selector) == "string" then
+      local size = point(display.size)
+      local scale = type(display.scale) == "number" and model.snap_scale(display.scale)
+      local transform = math.tointeger(display.transform or 0)
+      if size and size[1] > 0 and size[2] > 0 and scale and scale >= 0.25 and scale <= 10 and transform and transform >= 0 and transform <= 7 then
+        state.displays[key] = { selector = display.selector, size = size, scale = scale, transform = transform }
+      end
     end
   end
 
   for _, layout in ipairs(type(data.layouts) == "table" and data.layouts or {}) do
-    local positions = type(layout) == "table" and layout.positions
-    local valid = type(positions) == "table" and next(positions) ~= nil
-    for key, p in pairs(valid and positions or {}) do
-      valid = valid and type(key) == "string" and is_point(p)
+    local positions = {}
+    local valid = type(layout) == "table" and type(layout.positions) == "table" and next(layout.positions) ~= nil
+    for key, p in pairs(valid and layout.positions or {}) do
+      positions[key] = type(key) == "string" and point(p) or nil
+      valid = valid and positions[key] ~= nil
     end
     if valid then
-      state.layouts[#state.layouts + 1] = layout
+      state.layouts[#state.layouts + 1] = { positions = positions }
     end
   end
 
@@ -218,6 +226,8 @@ M.sanitize = sanitize
 
 local last_written
 
+-- A file that doesn't parse is moved aside to displays.json.bad rather than
+-- overwritten by the next save.
 function M.load(path)
   path = path or M.path
   local file = io.open(path, "r")
@@ -226,12 +236,19 @@ function M.load(path)
   end
   local text = file:read("a")
   file:close()
-  last_written = text
-  return sanitize(decode(text))
+
+  local data = decode(text)
+  if data == nil and text:find("%S") then
+    os.rename(path, path .. ".bad")
+    last_written = nil
+  else
+    last_written = text
+  end
+  return sanitize(data)
 end
 
 -- Write only when the content changed, through a temp file and rename so a
--- crash can't leave half a file behind.
+-- crash or a full disk can't leave half a file behind.
 function M.save(state, path)
   path = path or M.path
   local text = M.encode(state)
@@ -244,9 +261,9 @@ function M.save(state, path)
   if not file then
     return false
   end
-  file:write(text)
-  file:close()
-  if not os.rename(tmp, path) then
+  local written = file:write(text)
+  local closed = file:close()
+  if not (written and closed and os.rename(tmp, path)) then
     os.remove(tmp)
     return false
   end

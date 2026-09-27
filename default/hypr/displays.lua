@@ -2,10 +2,12 @@
 -- connected displays, and keeps a complete monitor rule registered for every
 -- known display, including the ones that are off. A display that connects
 -- lands on its remembered spot in Hyprland's first pass, so nothing that is
--- already on has to move. Positions change only when the user moves a
--- display, or when a scale step resizes one and its neighbours follow.
+-- already on has to move. Positions change when the user moves a display,
+-- when a scale step resizes one and its neighbours follow, or when a display
+-- leaves and the others would no longer touch.
 --
--- Everything goes through the omarchy_displays global, also from outside Lua:
+-- Outside code reaches this through the omarchy_displays global, which is
+-- only set while monitor rules go through here:
 --   hyprctl eval "omarchy_displays.place(2, 'left')"
 --   hyprctl repl "return omarchy_displays.status()"
 
@@ -18,15 +20,8 @@ local M = {}
 local LAYOUT_LIMIT = 16
 local SETTLE_MS = 1500
 
-local toggles_dir = paths.state_home .. "/omarchy/toggles/hypr/"
-local state = store.load()
-local targets = {} -- connector -> where we put that display, while it's on
-local registered -- signature of the rule set last registered
-local settling = false -- our rules are registered but maybe not applied yet
-local generation = 0
-
 local function toggle_on(name)
-  local file = io.open(toggles_dir .. name .. ".lua", "r")
+  local file = io.open(paths.state_home .. "/omarchy/toggles/hypr/" .. name .. ".lua", "r")
   if file then
     file:close()
     return true
@@ -34,50 +29,37 @@ local function toggle_on(name)
   return false
 end
 
+-- Every writer of these toggles reloads the config, so they're read once.
 -- Clamshell and the laptop-display toggle turn the internal panel off with a
 -- rule loaded after this module, which a runtime rule would override.
-local function internal_forced_off()
-  return toggle_on("internal-monitor-clamshell") or toggle_on("internal-monitor-disable")
-end
-
 -- Mirroring replaces the arrangement altogether.
-local function mirroring()
-  return toggle_on("internal-monitor-mirror")
-end
+local internal_off = toggle_on("internal-monitor-clamshell") or toggle_on("internal-monitor-disable")
+local mirrored = toggle_on("internal-monitor-mirror")
+
+local state = store.load()
+local targets = {} -- connector -> where we put that display, while it's on
+local registered = {} -- selector -> the rule last registered for it
+local settling = false -- our rules are registered but maybe not applied yet
+local generation = 0
 
 -- HL.Monitor objects must not outlive the event that produced them, so only
 -- plain copies are kept.
-local function plain(monitor)
-  local name = monitor.name
-  if not name or model.is_virtual(name) or monitor.is_mirror or (monitor.width or 0) <= 0 or (monitor.scale or 0) <= 0 then
-    return nil
-  end
-  return {
-    name = name,
-    description = monitor.description or "",
-    serial = monitor.serial or "",
-    width = math.floor(monitor.width),
-    height = math.floor(monitor.height),
-    x = math.floor(monitor.x + 0.5),
-    y = math.floor(monitor.y + 0.5),
-    scale = model.snap_scale(monitor.scale),
-    transform = math.floor(monitor.transform or 0),
-  }
-end
-
--- The displays that are on, keyed by identity. gone is a connector that
--- monitor.removed reported and extra one that monitor.added did; Hyprland's
--- own list may not reflect either yet while the event is delivered.
-local function read_live(gone, extra)
+local function read_live()
   local monitors = {}
   for _, monitor in ipairs(hl.get_monitors() or {}) do
-    local m = plain(monitor)
-    if m and m.name ~= gone and not (extra and m.name == extra.name) then
-      monitors[#monitors + 1] = m
+    if not model.is_virtual(monitor.name) and not monitor.is_mirror and monitor.width > 0 and monitor.scale > 0 then
+      monitors[#monitors + 1] = {
+        name = monitor.name,
+        description = monitor.description or "",
+        serial = monitor.serial or "",
+        width = monitor.width,
+        height = monitor.height,
+        x = monitor.x,
+        y = monitor.y,
+        scale = model.snap_scale(monitor.scale),
+        transform = monitor.transform or 0,
+      }
     end
-  end
-  if extra then
-    monitors[#monitors + 1] = extra
   end
 
   local live = {}
@@ -88,15 +70,6 @@ local function read_live(gone, extra)
   return live
 end
 
-local function at(rect, x, y)
-  local copy = {}
-  for field, value in pairs(rect) do
-    copy[field] = value
-  end
-  copy.x, copy.y = math.floor(x + 0.5), math.floor(y + 0.5)
-  return copy
-end
-
 local function current()
   local present = {}
   for _, rect in pairs(targets) do
@@ -105,41 +78,65 @@ local function current()
   return present
 end
 
-local function notify(message)
-  hl.exec_cmd(o.notify(message))
+local NEUTRAL = { position = "auto", scale = "auto", transform = 0 }
+
+local function same(a, b)
+  return b and a.position == b.position and a.scale == b.scale and a.transform == b.transform
 end
 
+-- Register what changed as one synchronous batch, which Hyprland applies in a
+-- single pass with one overlap check. Every field is given, because a rule
+-- inherits whatever it omits from the previous rule for the same output.
 local function register(present)
-  local skip_internal = internal_forced_off()
-  local rules, parts = {}, {}
+  local wanted, order = {}, {}
   for _, rule in ipairs(model.plan(present, state.displays, state.layouts)) do
-    if not (skip_internal and model.is_internal(rule.selector)) then
-      rules[#rules + 1] = rule
-      parts[#parts + 1] = string.format("%s %d %d %s %d", rule.selector, rule.x, rule.y, rule.scale, rule.transform)
+    if not (internal_off and model.is_internal(rule.selector)) then
+      wanted[rule.selector] = { position = string.format("%dx%d", rule.x, rule.y), scale = rule.scale, transform = rule.transform }
+      order[#order + 1] = rule.selector
     end
   end
 
-  local signature = table.concat(parts, "\n")
-  if signature == registered then
-    return false
+  -- A connector rule outlives its display until the next reload; reset it so
+  -- it can't catch the next monitor on that port.
+  local batch = {}
+  for selector in pairs(registered) do
+    if not wanted[selector] and not model.safe_when_absent(selector) then
+      batch[#batch + 1] = selector
+      wanted[selector] = NEUTRAL
+    end
   end
-  registered = signature
+  table.sort(batch)
 
-  -- One synchronous batch: Hyprland applies it in a single pass with one
-  -- overlap check. Every field is given, because a rule inherits whatever it
-  -- omits from the previous rule for the same output.
-  for _, rule in ipairs(rules) do
+  -- plan() orders desc: rules first. Whenever anything is sent, the external
+  -- connector rules go again last, so they stay newer than any desc: rule
+  -- that also matches a display sharing its description.
+  for _, selector in ipairs(order) do
+    if not same(wanted[selector], registered[selector]) then
+      batch[#batch + 1] = selector
+    end
+  end
+  if #batch > 0 then
+    for _, selector in ipairs(order) do
+      if not model.safe_when_absent(selector) and same(wanted[selector], registered[selector]) then
+        batch[#batch + 1] = selector
+      end
+    end
+  end
+
+  for _, selector in ipairs(batch) do
+    local rule = wanted[selector]
     hl.monitor({
-      output = rule.selector,
+      output = selector,
       mode = "preferred",
-      position = string.format("%dx%d", rule.x, rule.y),
+      position = rule.position,
       scale = rule.scale,
       transform = rule.transform,
       disabled = false,
       mirror = "",
     })
+    registered[selector] = rule ~= NEUTRAL and rule or nil
   end
-  return true
+  return #batch > 0
 end
 
 local check
@@ -156,69 +153,94 @@ local function settle()
   end, { timeout = SETTLE_MS, type = "oneshot" })
 end
 
--- Make present the arrangement: remember it for this set of displays and
--- register the rules for it and for every display that's off.
-local function commit(present)
+-- Make present the arrangement: mend it into one piece, remember it for this
+-- set if the user made it, and register the rules for it and for every
+-- display that's off. Placements this module works out are not remembered;
+-- they come out the same the next time.
+local function commit(present, made_by_user)
+  present = model.connect(present, state.layouts)
   targets = {}
   for key, rect in pairs(present) do
     targets[rect.name] = rect
-    local display = state.displays[key] or {}
-    display.selector = rect.selector
-    display.description = rect.description
-    display.size = { rect.width, rect.height }
-    display.scale = rect.scale
-    display.transform = rect.transform
-    state.displays[key] = display
+    state.displays[key] = { selector = rect.selector, size = { rect.width, rect.height }, scale = rect.scale, transform = rect.transform }
   end
 
-  if next(present) then
+  if made_by_user and next(present) then
     state.layouts = model.remember(state.layouts, present, LAYOUT_LIMIT)
-    store.save(state)
   end
+  store.save(state)
 
   if register(present) then
     settle()
   end
 end
 
--- Seat the displays that are on. The ones already placed stay where they
--- are. One that just connected goes where its remembered layout, or the
--- default, puts it: the spot its registered rule already gave it.
-local function sync(gone, extra)
-  if mirroring() then
-    return
+-- The displays that are on after some change size: from where we put them,
+-- main stays and the others follow.
+local function reflowed(live, sizes)
+  local old = {}
+  for key, m in pairs(live) do
+    old[key] = targets[m.name] or m
   end
+  local new = model.reflow(old, sizes, state.layouts)
+  local present = {}
+  for key, m in pairs(live) do
+    present[key] = model.moved(m, new[key].x, new[key].y)
+  end
+  return present
+end
 
-  local live = read_live(gone, extra)
+-- A display seen before comes back at its remembered scale and rotation.
+local function remembered(m)
+  local display = state.displays[m.key]
+  if not display or (display.scale == m.scale and display.transform == m.transform) then
+    return m
+  end
+  local rect = model.moved(m, m.x, m.y)
+  rect.scale, rect.transform = display.scale, display.transform
+  rect.w, rect.h = model.logical_size(m.width, m.height, rect.scale, rect.transform)
+  return rect
+end
+
+-- Seat the displays that are on after one connects or leaves, or after a
+-- reload. The ones already placed stay where they are; with none placed yet,
+-- main stays where it is. One that just connected goes where its remembered
+-- layout, or the default, puts it: the spot its registered rule already gave
+-- it. A set the user arranged comes back as arranged, around that anchor.
+local function sync(live)
   local present, fresh = {}, {}
   for key, m in pairs(live) do
     local target = targets[m.name]
     if target then
-      present[key] = at(m, target.x, target.y)
+      present[key] = model.moved(m, target.x, target.y)
     else
       fresh[#fresh + 1] = key
     end
   end
 
+  local anchor = model.main(present)
+  if not anchor then
+    anchor = model.main(live)
+    present[anchor] = remembered(live[anchor])
+  end
+
   table.sort(fresh)
   for _, key in ipairs(fresh) do
-    local m = live[key]
-    present[key] = at(m, model.place_joining(present, key, m.w, m.h, state.layouts))
+    if not present[key] then
+      local m = remembered(live[key])
+      present[key] = model.moved(m, model.place_joining(present, key, m.w, m.h, state.layouts))
+    end
   end
 
-  commit(present)
+  commit(model.restore(present, anchor, state.layouts) or present, false)
 end
 
--- Runs on every layout change. Once our own rules have landed, a difference
--- between what's on screen and what we placed was made by someone else and
--- is adopted: a new size (the Monitor panel's scale buttons) keeps our
--- positions and lets the neighbours follow; a move (hyprctl, a settings
--- tool) becomes the layout for this set.
+-- Runs on every layout change, which Hyprland also sends after a display
+-- connects or leaves. Once our own rules have landed, a difference between
+-- the screen and what we placed was made by someone else and is adopted: a
+-- new size keeps our positions and lets the neighbours follow; a move becomes
+-- the layout for this set.
 function check()
-  if mirroring() then
-    return
-  end
-
   local live = read_live()
   local unseen = 0
   for _ in pairs(targets) do
@@ -226,98 +248,90 @@ function check()
   end
   for _, m in pairs(live) do
     if not targets[m.name] then
-      return sync()
+      return sync(live)
     end
     unseen = unseen - 1
   end
   if unseen ~= 0 then
-    return sync()
+    return sync(live)
   end
 
-  local resized, moved = {}, false
+  local sizes, resized, moved = {}, false, false
   for key, m in pairs(live) do
     local target = targets[m.name]
+    sizes[key] = { w = m.w, h = m.h }
     if m.w ~= target.w or m.h ~= target.h or m.scale ~= target.scale or m.transform ~= target.transform then
-      resized[key] = { w = m.w, h = m.h }
+      resized = true
     elseif m.x ~= target.x or m.y ~= target.y then
       moved = true
     end
   end
 
   if settling then
-    settling = next(resized) ~= nil or moved
+    settling = resized or moved
     return
   end
 
-  if next(resized) then
-    local old = {}
-    for key, m in pairs(live) do
-      local target = targets[m.name]
-      old[key] = { x = target.x, y = target.y, w = target.w, h = target.h }
-    end
-    local new = model.reflow(old, resized)
-    local present = {}
-    for key, m in pairs(live) do
-      present[key] = at(m, new[key].x, new[key].y)
-    end
-    commit(present)
+  -- Whoever changed it may have replaced our rule for that output too.
+  if resized then
+    registered = {}
+    commit(reflowed(live, sizes), true)
   elseif moved then
-    commit(live)
+    registered = {}
+    commit(live, true)
+  end
+end
+
+-- Give the display on connector `name` a new scale, snapped to a clean one.
+-- It keeps its place and the neighbours follow its new size. Used by SUPER+/
+-- and by omarchy-hyprland-monitor-scaling for the Monitor panel.
+function M.set_scale(name, scale)
+  if mirrored or type(scale) ~= "number" or scale < 0.25 then
+    return
+  end
+
+  local live = read_live()
+  for key, m in pairs(live) do
+    if m.name == name then
+      scale = model.clean_scale(scale, m.width, m.height)
+      local sizes = {}
+      for k, other in pairs(live) do
+        sizes[k] = { w = other.w, h = other.h }
+      end
+      local w, h = model.logical_size(m.width, m.height, scale, m.transform)
+      sizes[key] = { w = w, h = h }
+
+      local present = reflowed(live, sizes)
+      present[key].scale, present[key].w, present[key].h = scale, w, h
+      commit(present, true)
+      return
+    end
   end
 end
 
 -- SUPER+/ and SUPER+ALT+/: the next clean scale up or down for the focused
--- display. It keeps its place and the neighbours follow its new size.
+-- display.
 function M.step_scale(direction)
-  if mirroring() then
-    return
-  end
-
   local active = hl.get_active_monitor()
   local name = active and active.name
-  local live = read_live()
-  local key
-  for k, m in pairs(live) do
+  for _, m in pairs(read_live()) do
     if m.name == name then
-      key = k
+      M.set_scale(name, model.step_scale(m.scale, direction, m.width, m.height))
+      return
     end
   end
-  if not key then
-    return
-  end
-
-  local m = live[key]
-  local scale = model.step_scale(m.scale, direction, m.width, m.height)
-  if scale == m.scale then
-    return
-  end
-
-  local old = {}
-  for k, other in pairs(live) do
-    local target = targets[other.name] or other
-    old[k] = { x = target.x, y = target.y, w = other.w, h = other.h }
-  end
-  local w, h = model.logical_size(m.width, m.height, scale, m.transform)
-  local new = model.reflow(old, { [key] = { w = w, h = h } })
-
-  local present = {}
-  for k, other in pairs(live) do
-    present[k] = at(other, new[k].x, new[k].y)
-  end
-  present[key].scale, present[key].w, present[key].h = scale, w, h
-  commit(present)
 end
 
 -- Put display D<number> left of, right of, above or below D<reference>
 -- (main when omitted). Beside it the bottoms are flush; above or below it's
--- centred. Nothing else moves.
+-- centred. Displays it leaves detached are seated again.
 function M.place(number, side, reference)
   local present = current()
   local order = model.numbering(present)
   local key = order[number]
   local anchor = reference and order[reference] or model.main(present)
   local sides = { left = true, right = true, above = true, below = true }
-  if not key or not anchor or key == anchor or not sides[side] then
+  if mirrored or not key or not anchor or key == anchor or not sides[side] then
     return false
   end
 
@@ -328,14 +342,14 @@ function M.place(number, side, reference)
   if not ok then
     for index, other in ipairs(order) do
       if other == blocker then
-        notify(string.format("D%d can't go there: it would overlap D%d", number, index))
+        hl.exec_cmd(o.notify(string.format("D%d can't go there: it would overlap D%d", number, index)))
       end
     end
     return false
   end
 
-  present[key] = at(rect, x, y)
-  commit(present)
+  present[key] = model.moved(rect, x, y)
+  commit(present, true)
   return true
 end
 
@@ -350,50 +364,33 @@ function M.status()
   return table.concat(lines, "\n")
 end
 
-omarchy_displays = M
+if not mirrored then
+  omarchy_displays = M
 
-local live = read_live()
-if next(live) then
-  -- A reload: everything stays exactly where it is.
-  commit(live)
-else
-  -- First start, before any output exists: assume the most recently used
-  -- layout, so each display's first modeset already puts it in place.
-  local assumed = {}
-  local recent = state.layouts[1]
-  for key, p in pairs(recent and recent.positions or {}) do
-    local display = state.displays[key]
-    if display and model.safe_when_absent(display.selector) then
-      local w, h = model.logical_size(display.size[1], display.size[2], display.scale, display.transform)
-      assumed[key] = {
-        x = p[1],
-        y = p[2],
-        w = w,
-        h = h,
-        selector = display.selector,
-        description = display.description,
-        scale = display.scale,
-        transform = display.transform,
-      }
+  local live = read_live()
+  if next(live) and model.restore(live, model.main(live), state.layouts) then
+    -- A reload: bring back the remembered arrangement and scales.
+    sync(live)
+  elseif next(live) then
+    -- The first start of this module on a running desktop: adopt what's
+    -- there as this set's arrangement.
+    commit(live, true)
+  else
+    -- First start, before any output exists: assume the most recently used
+    -- layout, so each display's first modeset already puts it in place.
+    local assumed = {}
+    local recent = state.layouts[1]
+    for key, p in pairs(recent and recent.positions or {}) do
+      local display = state.displays[key]
+      if display and model.safe_when_absent(display.selector) then
+        local w, h = model.logical_size(display.size[1], display.size[2], display.scale, display.transform)
+        assumed[key] = { x = p[1], y = p[2], w = w, h = h, selector = display.selector, scale = display.scale, transform = display.transform }
+      end
     end
+    register(assumed)
   end
-  register(assumed)
+
+  hl.on("monitor.layout_changed", check)
 end
-
-hl.on("monitor.added", function(monitor)
-  local m = plain(monitor)
-  if m then
-    sync(nil, m)
-  end
-end)
-
-hl.on("monitor.removed", function(monitor)
-  local name = monitor.name
-  if name and not model.is_virtual(name) then
-    sync(name)
-  end
-end)
-
-hl.on("monitor.layout_changed", check)
 
 return M

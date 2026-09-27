@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 source "$(dirname "${BASH_SOURCE[0]}")/base-test.sh"
 
 require_command lua
@@ -99,6 +101,30 @@ local mru = {
 }
 x = model.place_joining({ ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720 } }, "a", 500, 500, mru)
 eq(x, 1152, "the most recently used layout wins")
+local dock = {
+  { positions = { ["eDP-1"] = { 0, 0 }, a = { 1152, 0 }, b = { 2752, 0 } } },
+  { positions = { ["eDP-1"] = { 0, 0 }, a = { -500, 0 } } },
+}
+x = model.place_joining({ ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720 } }, "a", 500, 500, dock)
+eq(x, -500, "a layout for exactly this set beats a more recent larger one")
+x, y = model.place_joining({ ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720 } }, "b", 1600, 900, dock)
+eq(x .. "," .. y, "1152,-180", "a remembered spot that touches nothing is skipped")
+
+-- Restore: an arranged set comes back as arranged, around the anchor.
+local restored = model.restore({
+  ["eDP-1"] = { x = 5000, y = 0, w = 1152, h = 720 },
+  a = { x = 0, y = 0, w = 500, h = 500 },
+}, "eDP-1", mru)
+eq(restored.a.x, 6152, "restore shifts the stored arrangement onto the anchor")
+eq(model.restore({ ["eDP-1"] = { x = 0, y = 0, w = 1, h = 1 } }, "eDP-1", mru), nil, "no stored arrangement for this set")
+
+-- Connect: the arrangement stays in one piece.
+local gap = model.connect({
+  ["desc:" .. benq] = { x = -1600, y = -180, w = 1600, h = 900 },
+  dell = { x = 1152, y = 0, w = 1920, h = 1080 },
+}, {})
+eq(gap.dell.x .. "," .. gap.dell.y, "0,-360", "a display left detached is seated beside main")
+eq(gap["desc:" .. benq].x, -1600, "main stays where it is")
 
 -- Reflow: main keeps its spot, neighbours keep side and alignment.
 local new = model.reflow(desk, { ["eDP-1"] = { w = 864, h = 540 } })
@@ -112,6 +138,18 @@ local stacked = {
 }
 new = model.reflow(stacked, { top = { w = 2560, h = 1440 } })
 eq(new.top.x .. "," .. new.top.y, "-704,-540", "a display above stays centred")
+local drifted = {
+  ["eDP-1"] = { x = 0, y = 900, w = 1152, h = 720 },
+  top = { x = -225, y = 0, w = 1600, h = 900 },
+}
+new = model.reflow(drifted, {})
+eq(new.top.x, -225, "an off-centre display keeps its exact offset")
+local offset = {
+  ["eDP-1"] = { x = 0, y = 900, w = 1728, h = 1080 },
+  top = { x = 1500, y = 0, w = 2560, h = 900 },
+}
+new = model.reflow(offset, { ["eDP-1"] = { w = 1152, h = 720 } })
+eq(new.top.x .. "," .. new.top.y, "1151,0", "an offset display still touches after main shrinks")
 local tangled = {
   a = { x = 0, y = 0, w = 100, h = 100 },
   b = { x = 100, y = 0, w = 100, h = 50 },
@@ -119,9 +157,9 @@ local tangled = {
 }
 new = model.reflow(tangled, { b = { w = 100, h = 100 } })
 for key, rect in pairs(new) do
-  assert(model.fits(new, rect, key), "reflow never overlaps: " .. key)
+  assert(model.fits(new, rect, key), "reflow leaves every display touching and none overlapping: " .. key)
 end
-eq(new.a.x .. "," .. new.a.y, "0,0", "strip fallback keeps main")
+eq(new.a.x .. "," .. new.a.y, "0,0", "repair keeps main")
 
 -- Remember: most recent first, one entry per set, bounded.
 local remembered = model.remember({
@@ -134,7 +172,7 @@ eq(#model.remember(remembered, { c = { x = 0, y = 0 } }, 2), 2, "bounded")
 
 -- Plan: complete set, desc rules first, unsafe absent rules left out.
 local present = {
-  ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720, selector = "eDP-1", scale = 3, transform = 0, description = "" },
+  ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720, selector = "eDP-1", scale = 3, transform = 0 },
 }
 local known = {
   ["desc:" .. benq] = { selector = "desc:" .. benq, size = { 2560, 1440 }, scale = 1.6, transform = 0 },
@@ -145,12 +183,10 @@ eq(#rules, 2, "absent connector-selected display gets no rule")
 eq(rules[1].selector, "desc:" .. benq, "desc rules come first")
 eq(rules[1].x .. "," .. rules[1].y, "-1600,-180", "absent display rule is precomputed")
 eq(rules[2].selector, "eDP-1", "connector rules come last")
-present["desc:BNQ BenQ LCD T4M012360190"] = { x = -1600, y = -180, w = 1600, h = 900, selector = "desc:BNQ BenQ LCD T4M012360190", scale = 1.6, transform = 0, description = "BNQ BenQ LCD T4M012360190" }
-eq(#model.plan(present, known, layouts), 2, "an absent desc rule that would match a present display is left out")
 print("model ok")
 LUA
 ) || fail "display model" "$model_output"
-pass "display model: identity, scale, placement, reflow, remember, plan"
+pass "display model: identity, scale, placement, restore, connect, reflow, remember, plan"
 
 store_output=$(run_lua "$tmpdir/store" 2>&1 <<'LUA'
 package.path = os.getenv("OMARCHY_PATH") .. "/?.lua;" .. package.path
@@ -175,10 +211,17 @@ assert(store.decode('{"a": 1} trailing') == nil, "trailing garbage is rejected")
 
 local clean = store.sanitize({
   version = 1,
-  displays = { ok = { selector = "eDP-1", size = { 1, 1 }, scale = 2.0000001 }, bad = { selector = 3 } },
-  layouts = { { positions = { a = { 0, 0 } } }, { positions = { a = "x" } }, {} },
+  displays = {
+    ok = { selector = "eDP-1", size = { 1, 1 }, scale = 2.0000001 },
+    bad = { selector = 3 },
+    tiny = { selector = "a", size = { 10, 10 }, scale = 0.004 },
+    turned = { selector = "b", size = { 10, 10 }, scale = 1, transform = 9 },
+    fractional = { selector = "c", size = { 10.5, 10 }, scale = 1 },
+  },
+  layouts = { { positions = { a = { 0, 0 } } }, { positions = { a = "x" } }, {}, { positions = { a = { 0.5, 0 } } } },
 })
 assert(clean.displays.ok and not clean.displays.bad, "invalid display records are dropped")
+assert(not clean.displays.tiny and not clean.displays.turned and not clean.displays.fractional, "out-of-range values are dropped")
 assert(clean.displays.ok.scale == 2, "stored scales snap to k/120")
 assert(#clean.layouts == 1, "invalid layouts are dropped")
 assert(#store.sanitize({ version = 99 }).layouts == 0, "unknown versions start fresh")
@@ -190,10 +233,16 @@ assert(store.save(state, path) == false, "an unchanged save is skipped")
 local loaded = store.load(path)
 assert(loaded.layouts[1].positions["eDP-1"][1] == 1600, "saved state loads back")
 assert(io.open(path .. ".tmp", "r") == nil, "no temp file is left behind")
+
+local file = io.open(path, "w")
+file:write('{ "version": 1, "layouts": [ oops')
+file:close()
+assert(#store.load(path).layouts == 0, "a corrupt file loads as an empty state")
+assert(io.open(path, "r") == nil and io.open(path .. ".bad", "r"), "a corrupt file is moved aside, not overwritten")
 print("store ok")
 LUA
 ) || fail "display store" "$store_output"
-pass "display store: JSON round-trip, sanitizing, write only on change"
+pass "display store: JSON round-trip, sanitizing, corrupt files kept, write only on change"
 
 flow_output=$(run_lua "$tmpdir/flow" 2>&1 <<'LUA'
 package.path = os.getenv("OMARCHY_PATH") .. "/?.lua;" .. package.path
@@ -201,12 +250,12 @@ require("default.hypr.helpers")
 
 -- A small Hyprland: rules upsert and merge per selector, the newest match
 -- wins, a connecting output takes its rule without an overlap check, added
--- fires before the output is positioned, and pending rules apply in one pass
--- per frame with one overlap check.
+-- fires before the output is positioned, pending rules apply in one pass per
+-- frame with one overlap check, and a changed scale or mode is a modeset.
 local H
 
 local function reset_hyprland()
-  H = { outputs = {}, order = {}, rules = {}, handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, focused = nil }
+  H = { outputs = {}, order = {}, rules = {}, handlers = {}, timers = {}, notes = {}, pending = false, toasts = 0, moved = {}, modesets = {}, sent = 0, focused = nil }
 end
 reset_hyprland()
 
@@ -245,12 +294,16 @@ end
 
 local function apply_rule(o)
   local rule = rule_for(o)
-  local was_on, old_x, old_y = o.enabled, o.x, o.y
+  local was_on, old_x, old_y, old_scale, old_mode = o.enabled, o.x, o.y, o.scale, o.mode
   o.enabled = not (rule and rule.disabled)
   if not o.enabled then
     return was_on and "off" or nil
   end
   o.scale = rule and type(rule.scale) == "number" and rule.scale or o.auto_scale
+  o.mode = rule and rule.mode or "preferred"
+  if was_on and (old_scale ~= o.scale or old_mode ~= o.mode) then
+    H.modesets[o.name] = (H.modesets[o.name] or 0) + 1
+  end
   o.transform = rule and rule.transform or 0
   local x, y
   if rule and rule.position then
@@ -329,6 +382,7 @@ hl = {
     end
     H.rules[#H.rules + 1] = merged
     H.pending = true
+    H.sent = H.sent + 1
   end,
   get_monitors = function()
     local list = {}
@@ -354,9 +408,11 @@ hl = {
   end,
 }
 
--- A reload clears rules, handlers and timers, then runs the config again.
+-- A reload clears rules, handlers and timers, then runs the config again in
+-- a fresh Lua state.
 local function load_config(after)
   H.rules, H.handlers, H.timers = {}, {}, {}
+  omarchy_displays = nil
   for _, module in ipairs({ "default.hypr.displays", "default.hypr.displays.model", "default.hypr.displays.store" }) do
     package.loaded[module] = nil
   end
@@ -395,6 +451,7 @@ local function disconnect(name)
     fire("monitor.removed", view(o))
   end
   check_overlaps()
+  fire("monitor.layout_changed")
   frame()
 end
 
@@ -425,6 +482,12 @@ end
 local function moves(name)
   return H.moved[name] or 0
 end
+
+local function modesets(name)
+  return H.modesets[name] or 0
+end
+
+local store = require("default.hypr.displays.store")
 
 local benq = "BNQ BenQ LCD T4M01236019"
 local toggles = os.getenv("HOME") .. "/.local/state/omarchy/toggles/hypr/"
@@ -469,8 +532,9 @@ eq(pos("eDP-1"), "0,0", "scaled main keeps its position")
 eq(pos("USB-2"), "-2560,-720", "neighbour stays left with bottoms flush")
 eq(H.toasts, 0, "scale step raises no overlap toast")
 
--- The Monitor panel's scale buttons still run the old script: a connector
--- rule with position=auto. The change is adopted and the layout repaired.
+-- A tool outside the module rescales with a connector rule and position=auto
+-- (what the scaling script did before it delegated). The new scale is
+-- adopted and the display re-seated.
 settle()
 hl.monitor({ output = "USB-2", mode = "2560x1440@60", position = "auto", scale = 1.6 })
 frame()
@@ -483,10 +547,7 @@ hl.monitor({ output = "USB-2", position = "-1600x0" })
 frame()
 settle()
 eq(pos("USB-2"), "-1600,0", "outside move is kept")
-local file = io.open(os.getenv("HOME") .. "/.local/state/omarchy/displays.json")
-local saved = file:read("a")
-file:close()
-assert(saved:find('"desc:' .. benq .. '": %[%-1600, 0%]'), "outside move is remembered")
+eq(store.load().layouts[1].positions["desc:" .. benq][2], 0, "outside move is remembered")
 
 -- A reload changes nothing.
 H.moved = {}
@@ -516,6 +577,12 @@ load_config(function()
 end)
 settle()
 eq(H.outputs["eDP-1"].enabled, false, "clamshell keeps the panel off")
+H.focused = "USB-2"
+omarchy_displays.step_scale(1)
+settle()
+eq(H.outputs["eDP-1"].enabled, false, "a later change doesn't switch the closed panel back on")
+omarchy_displays.step_scale(-1)
+settle()
 os.remove(toggles .. "internal-monitor-clamshell.lua")
 
 -- Lid opens: the clamshell toggle is gone and the config reloads. The panel
@@ -532,17 +599,73 @@ connect("FALLBACK", "", "", 1920, 1080, 1)
 assert(not omarchy_displays.status():find("FALLBACK"), "FALLBACK is ignored")
 disconnect("FALLBACK")
 
--- Mirroring: nothing is registered while the mirror toggle exists.
+-- Mirroring: nothing is registered while the mirror toggle exists, and the
+-- scripts fall back to their own behaviour.
 flag = io.open(toggles .. "internal-monitor-mirror.lua", "w")
 flag:write("-- mirror\n")
 flag:close()
-local before = #H.rules
-omarchy_displays.step_scale(1)
-eq(#H.rules, before, "no rules while mirroring")
+load_config()
+local mirror_module = require("default.hypr.displays")
+eq(omarchy_displays, nil, "the API is not offered while mirroring")
+local sent = H.sent
+mirror_module.step_scale(1)
+mirror_module.place(1, "right")
+eq(H.sent, sent, "no rules while mirroring")
 os.remove(toggles .. "internal-monitor-mirror.lua")
+load_config()
+settle()
+eq(H.outputs["eDP-1"].scale, 3, "after mirroring the laptop is back at its remembered scale")
+eq(pos("USB-2"), "-1600,0", "after mirroring the BenQ is back at its remembered spot")
+
+-- A display without a usable serial is selected by connector. When it
+-- leaves, its rule is reset, so the next monitor on that port starts clean.
+connect("USB-3", "SAM TV", "0", 1920, 1080, 1)
+settle()
+H.focused = "USB-3"
+omarchy_displays.step_scale(1)
+settle()
+eq(H.outputs["USB-3"].scale, 1.25, "the TV steps up")
+disconnect("USB-3")
+settle()
+connect("USB-3", "GSM LG XYZ", "XYZ", 1920, 1080, 1)
+settle()
+eq(H.outputs["USB-3"].scale, 1, "a new display on that port doesn't inherit the old connector rule")
+disconnect("USB-3")
+settle()
+
+-- Three displays: BenQ | laptop | Dell. When the middle one goes away the
+-- others close up, and when it returns the arranged set comes back.
+connect("USB-4", "DEL U2723QE ABC", "ABC", 3840, 2160, 2)
+settle()
+eq(pos("USB-4"), "1152,-360", "Dell goes right of main")
+assert(omarchy_displays.place(3, "right"), "arrange the three")
+settle()
+H.moved = {}
+disconnect("eDP-1")
+settle()
+eq(pos("USB-2"), "-1600,0", "the BenQ stays when the middle display goes")
+eq(pos("USB-4"), "0,-180", "the Dell closes up beside the BenQ")
+connect("eDP-1", "", "", 3456, 2160, 2)
+settle()
+eq(pos("USB-2"), "-1600,0", "the BenQ stays when the middle display returns")
+eq(pos("eDP-1"), "0,0", "the laptop returns to the middle")
+eq(pos("USB-4"), "1152,-360", "the Dell returns to the right")
+eq(H.toasts, 0, "no overlap toast through all of it")
+
+-- The Monitor panel hands its scale to the module: the same scale again
+-- changes nothing, a new one keeps the display in place.
+sent = H.sent
+omarchy_displays.set_scale("USB-4", 2)
+eq(H.sent, sent, "setting the current scale sends nothing")
+H.modesets = {}
+omarchy_displays.set_scale("USB-4", 1.6)
+settle()
+eq(pos("USB-4"), "1152,-630", "the Dell keeps its side and bottom edge at 1.6")
+eq(modesets("USB-4"), 1, "one modeset for the rescaled display")
+eq(modesets("eDP-1") + modesets("USB-2"), 0, "no modeset for the others")
 
 print(omarchy_displays.status())
 print("flow ok")
 LUA
 ) || fail "display arrangement flow" "$flow_output"
-pass "display arrangement: first sight, place, replug, scale, outside changes, reload, boot, clamshell"
+pass "display arrangement: first sight, place, replug, scale, outside changes, reload, boot, clamshell, mirror, ports, three displays"
