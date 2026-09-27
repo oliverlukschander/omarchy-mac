@@ -69,6 +69,20 @@ for channel in stable rc edge dev; do
   pass "$channel starts cold, authorizes the switch per command, runs the refresh hook cold, hands off to one update authorization and exits cold"
 done
 
+# A channel with no qualified packages for the platform stops before anything,
+# the dev confirmation included.
+for platform in apple-silicon qualcomm generic-aarch64; do
+  for channel in stable rc edge dev; do
+    [[ $platform != "apple-silicon" && ( $channel == "edge" || $channel == "dev" ) ]] && continue
+    reset_boundary
+    if SUDO_TEST_PLATFORM=$platform run_channel "$channel"; then fail "$platform refused $channel"; fi
+    if grep -Eq '^step:|^sudo -N ' "$SUDO_TEST_LOG"; then fail "$platform: $channel was refused before any change" "$(<"$SUDO_TEST_LOG")"; fi
+    grep -q "not qualified for $platform" "$boundary_tmp/output" || fail "$platform: the refusal says why" "$(<"$boundary_tmp/output")"
+    assert_boundary_cold "$platform $channel"
+  done
+done
+pass "aarch64 platforms refuse a channel not qualified for them before any change, Apple Silicon every one for now"
+
 reset_boundary
 wrapper="$SUDO_TEST_HOME/omarchy/default/omarchy/sudo-no-update/sudo"
 mv "$wrapper" "$boundary_tmp/saved-wrapper"
@@ -80,6 +94,25 @@ grep -q 'Update the checkout before switching to dev' "$boundary_tmp/output" || 
 assert_boundary_cold "stale checkout"
 mv "$boundary_tmp/saved-wrapper" "$wrapper"
 pass "a stale dev checkout is rejected before linking or privileged work"
+
+# On aarch64 the checkout's own refresh keeps the machine's repositories only
+# once it tells platforms apart: a checkout without that is refused the same way.
+checkout="$SUDO_TEST_HOME/omarchy"
+for required in bin/omarchy-hw-platform install/helpers/pacman.sh; do
+  for platform in qualcomm generic-aarch64; do
+    reset_boundary
+    mv "$checkout/$required" "$boundary_tmp/saved-required"
+    if SUDO_TEST_PLATFORM=$platform run_channel dev; then fail "$platform: a dev checkout without $required was accepted"; fi
+    mv "$boundary_tmp/saved-required" "$checkout/$required"
+    if grep -Eq '^step:omarchy-(dev-link|state)|^step:pacman|^sudo -N ' "$SUDO_TEST_LOG"; then
+      fail "$platform: a dev checkout without $required changed the system before rejection" "$(<"$SUDO_TEST_LOG")"
+    fi
+    grep -q "Update the checkout before switching to dev; on $platform it needs $required" "$boundary_tmp/output" ||
+      fail "$platform: the rejection names $required" "$(<"$boundary_tmp/output")"
+    assert_boundary_cold "$platform checkout without $required"
+  done
+done
+pass "on aarch64 a dev checkout that can't keep the machine's repositories is rejected before linking"
 
 reset_boundary
 OMARCHY_PATH="$SUDO_TEST_HOME/omarchy" run_channel stable || fail "leaving dev failed" "$(<"$boundary_tmp/output")"
