@@ -28,5 +28,9 @@ end
 -- Step by number, so the swipe reaches empty workspaces as Spaces do in macOS.
 -- Hyprland's default steps only through workspaces that exist and never out of
 -- an empty one into a new one. A user's own gesture keeps Hyprland's stepping.
-hl.config({ gestures = { workspace_swipe_use_r = true } })
+-- Per-display workspaces keep the swipe on the display's own workspaces
+-- instead: stepping by number would run into the next display's.
+if not (omarchy_displays and omarchy_displays.own_workspaces) then
+  hl.config({ gestures = { workspace_swipe_use_r = true } })
+end
 hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace" })

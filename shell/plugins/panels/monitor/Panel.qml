@@ -1,7 +1,10 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
+import Quickshell.Wayland
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model
@@ -26,6 +29,23 @@ Panel {
   property string monitorScale: ""
   property var displays: []
   property int enabledDisplayCount: 0
+  // The display module's main display ("" while the module isn't managing
+  // monitors, which hides the arrangement), and whether Identify is showing.
+  property string mainName: ""
+  property bool identifying: false
+  // With the display module and two or more displays on, scale is Linked
+  // displays (every display in proportion to main) or Per display (each
+  // tuned by hand). The scale row is always for the display this panel
+  // opened on.
+  readonly property bool arranged: mainName !== "" && enabledDisplayCount > 1
+  // Per display once the module has a display tuned by hand, or while the
+  // user has picked it in this panel and not tuned anything yet.
+  property bool tunedByHand: false
+  property bool perDisplayChosen: false
+  readonly property bool perDisplay: tunedByHand || perDisplayChosen
+  property var pendingAction: null
+  readonly property var panelMonitor: button.QsWindow.window ? Hyprland.monitorFor(button.QsWindow.window.screen) : null
+  readonly property string scaleTarget: arranged && panelMonitor ? panelMonitor.name : focusedMonitor
 
   // Carry sub-notch touchpad deltas between wheel events.
   property real wheelAccumulator: 0
@@ -43,12 +63,27 @@ Panel {
   // signal so keyboard cursor and pointer share one highlight.
   readonly property var scalePresets: ["1", "1.25", "1.6", "2", "3", "4"]
   readonly property var scaleValues: {
+    var display = displayNamed(scaleTarget)
+    return display ? Model.availableScales(scalePresets, display.width, display.height) : scalePresets
+  }
+
+  // The display rows, in display order (display 1 first), those that are off
+  // last.
+  readonly property var rows: Model.numberedDisplays(displays, arrangement.displays.map(function(d) { return d.name }))
+
+  function displayNamed(name) {
     for (var i = 0; i < displays.length; i++) {
-      var display = displays[i]
-      if (display && display.focused)
-        return Model.availableScales(scalePresets, display.width, display.height)
+      if (displays[i] && displays[i].name === name) return displays[i]
     }
-    return scalePresets
+    return null
+  }
+
+  function liveScale(name) {
+    var values = Hyprland.monitors.values
+    for (var i = 0; i < values.length; i++) {
+      if (values[i].name === name) return values[i].scale
+    }
+    return monitorScale
   }
   property string focusSection: "scale"
   property int selectedIndex: 0
@@ -76,7 +111,7 @@ Panel {
     var list = []
     if (brightnessAvailable) list.push("brightness")
     list.push("textsize")
-    list.push("scale")
+    if (!(arranged && perDisplay)) list.push("scale")
     if (displays.length > 1) list.push("monitors")
     return list
   }
@@ -85,7 +120,7 @@ Panel {
     if (section === "brightness") return 0  // only the slider sentinel at -1
     if (section === "textsize") return 0    // slider sentinel at -1, like brightness
     if (section === "scale") return scaleValues.length
-    if (section === "monitors") return displays.length
+    if (section === "monitors") return rows.length
     return 0
   }
 
@@ -151,8 +186,8 @@ Panel {
       setScale(scaleValues[selectedIndex])
       return
     }
-    if (focusSection === "monitors" && selectedIndex >= 0 && selectedIndex < displays.length) {
-      var d = displays[selectedIndex]
+    if (focusSection === "monitors" && selectedIndex >= 0 && selectedIndex < rows.length) {
+      var d = rows[selectedIndex]
       if (d) toggleDisplay(d.name, d.enabled)
     }
     // brightness: no separate action; the slider value is the action.
@@ -229,8 +264,37 @@ Panel {
     function hide() { root.close() }
   }
 
+  // One action at a time; the last one asked for while another runs goes next.
+  function run(command) {
+    if (actionProc.running) {
+      root.pendingAction = command
+      return
+    }
+    actionProc.command = command
+    actionProc.running = true
+  }
+
+  // Linked displays drops any hand tuning, so every display matches main again.
+  function setScaleMode(each) {
+    root.perDisplayChosen = each
+    if (!each) run(["hyprctl", "eval", "omarchy_displays.match_all()"])
+  }
+
+  function setMain(name) {
+    run(["hyprctl", "eval", "omarchy_displays.set_main(\"" + name + "\")"])
+  }
+
+  // Shows each display's number big on that display for a moment.
+  function identify() {
+    root.identifying = true
+    identifyTimer.restart()
+  }
+
   function refresh() {
     if (!stateProc.running) stateProc.running = true
+    if (!mainProc.running) mainProc.running = true
+    // Quickshell's monitor list doesn't follow scale changes by itself.
+    Hyprland.refreshMonitors()
   }
 
   function setBrightness(value) {
@@ -266,20 +330,13 @@ Panel {
   }
 
   function activeScaleIndex() {
-    for (var i = 0; i < displays.length; i++) {
-      var display = displays[i]
-      if (display && display.focused)
-        return Model.matchingScaleIndex(scaleValues, monitorScale, display.width, display.height)
-    }
-    return -1
+    var display = displayNamed(scaleTarget)
+    return display ? Model.closestScaleIndex(scaleValues, liveScale(display.name), display.width, display.height) : -1
   }
 
   function effectiveScale(scale) {
-    for (var i = 0; i < displays.length; i++) {
-      var display = displays[i]
-      if (display && display.focused)
-        return Model.cleanScale(scale, display.width, display.height)
-    }
+    var display = displayNamed(scaleTarget)
+    if (display) return Model.cleanScale(scale, display.width, display.height)
     return normalizeScale(scale)
   }
 
@@ -300,13 +357,17 @@ Panel {
     if (!name) return
     if (enabled && root.enabledDisplayCount <= 1) return
 
-    actionProc.command = ["hyprctl", "keyword", "monitor", name + (enabled ? ",disable" : ",preferred,auto,auto")]
-    if (!actionProc.running) actionProc.running = true
+    var command = Model.displayToggleCommand(name, enabled, root.mainName !== "")
+    if (command) run(command)
   }
 
-  function setScale(scale) {
-    actionProc.command = ["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale]
-    if (!actionProc.running) actionProc.running = true
+  // by_hand tunes the display on its own (the Per display rows).
+  function setScale(scale, name, byHand) {
+    if (arranged) {
+      run(["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + (byHand ? ", true" : "") + ")"])
+    } else {
+      run(["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale])
+    }
   }
 
   // ---- Text size (shell base font + GTK text-scaling, via one CLI) ----
@@ -361,10 +422,12 @@ Panel {
         focusSection = "brightness"
         selectedIndex = -1
       } else {
-        focusSection = "scale"
-        selectedIndex = 0
+        focusSection = visibleSections.indexOf("scale") >= 0 ? "scale" : "textsize"
+        selectedIndex = focusSection === "scale" ? 0 : -1
       }
       cursorActive = false
+    } else {
+      perDisplayChosen = false
     }
   }
 
@@ -378,7 +441,8 @@ Panel {
   // rest. External brightness changes are reflected whenever the panel is open.
   Timer {
     interval: 5000
-    running: root.opened
+    // Not while a display is dragged: new monitor data rebuilds the tiles.
+    running: root.opened && !arrangement.dragging
     repeat: true
     onTriggered: root.refresh()
   }
@@ -430,9 +494,89 @@ Panel {
   }
 
   Process {
+    id: mainProc
+    // hyprctl prints something else for an empty answer, so "-" stands for
+    // "not managing monitors" and only a known display counts as main.
+    command: ["hyprctl", "repl", "return omarchy_displays and (omarchy_displays.main_name() .. ' ' .. omarchy_displays.scale_mode()) or '-'"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var fields = String(text || "").trim().split(" ")
+        var known = Hyprland.monitors.values.some(function(m) { return m.name === fields[0] })
+        root.mainName = known ? fields[0] : ""
+        root.tunedByHand = fields[1] === "each"
+        if (root.tunedByHand) root.perDisplayChosen = false
+      }
+    }
+  }
+
+  Timer {
+    id: identifyTimer
+    interval: 2000
+    onTriggered: root.identifying = false
+  }
+
+  Variants {
+    model: root.identifying ? Quickshell.screens : []
+
+    PanelWindow {
+      required property var modelData
+
+      screen: modelData
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "transparent"
+      exclusionMode: ExclusionMode.Ignore
+      mask: Region {}
+      WlrLayershell.namespace: "omarchy-identify"
+      WlrLayershell.layer: WlrLayer.Overlay
+
+      Column {
+        readonly property var monitor: Hyprland.monitorFor(modelData)
+        anchors.centerIn: parent
+
+        DisplayBadge {
+          anchors.horizontalCenter: parent.horizontalCenter
+          number: {
+            for (var i = 0; i < arrangement.displays.length; i++) {
+              if (parent.monitor && arrangement.displays[i].name === parent.monitor.name) return i + 1
+            }
+            return 0
+          }
+          size: modelData.height / 3
+          color: "white"
+          fontFamily: root.bar.fontFamily
+          layer.enabled: true
+          layer.effect: MultiEffect {
+            shadowEnabled: true
+            shadowColor: Qt.rgba(0, 0, 0, 0.6)
+            shadowBlur: 0.4
+          }
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          textFormat: Text.PlainText
+          text: parent.monitor ? Model.displayLabel(root.displayNamed(parent.monitor.name)) : ""
+          color: "white"
+          style: Text.Outline
+          styleColor: Qt.rgba(0, 0, 0, 0.6)
+          font.family: root.bar.fontFamily
+          font.pixelSize: modelData.height / 24
+        }
+      }
+    }
+  }
+
+  Process {
     id: actionProc
     stdout: StdioCollector { waitForEnd: true }
-    onRunningChanged: if (!running) root.refresh()
+    onRunningChanged: {
+      if (running) return
+      var next = root.pendingAction
+      root.pendingAction = null
+      if (next) root.run(next)
+      else root.refresh()
+    }
   }
 
   // Applies text size via the CLI, which rewrites the shell override file;
@@ -740,11 +884,63 @@ Panel {
 
               PanelSectionHeader {
                 id: scaleHeader
+                readonly property var target: root.rows.filter(function(d) { return d.name === root.scaleTarget })[0]
+                // Linked, the row is for the display this panel opened on.
+                readonly property bool named: root.arranged && !root.perDisplay && target !== undefined
                 text: "SCALE"
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
+              }
+
+              DisplayBadge {
+                id: scaleBadge
+                visible: scaleHeader.named
+                number: visible ? scaleHeader.target.number : 0
+                size: Style.font.caption * 1.6
+                color: scaleHeader.color
+                fontFamily: root.bar.fontFamily
+                anchors.left: scaleHeader.right
+                anchors.leftMargin: Style.space(4)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              PanelSectionHeader {
+                visible: scaleHeader.named
+                text: visible ? Model.displayLabel(scaleHeader.target) : ""
+                width: parent.width - scaleModes.width - Style.space(8) - x
+                elide: Text.ElideRight
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.left: scaleBadge.right
+                anchors.leftMargin: Style.space(4)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Row {
+                id: scaleModes
+                visible: root.arranged
+                spacing: Style.spacing.xs
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+
+                Repeater {
+                  model: [{ label: "Linked displays", each: false }, { label: "Per display", each: true }]
+
+                  Button {
+                    required property var modelData
+                    text: modelData.label
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                    horizontalPadding: Style.spacing.sm
+                    verticalPadding: Style.spacing.controlPaddingY
+                    bordered: true
+                    active: root.perDisplay === modelData.each
+                    onClicked: root.setScaleMode(modelData.each)
+                  }
+                }
               }
 
               // Name the monitor SCALE targets, since it only applies to the
@@ -754,7 +950,7 @@ Panel {
                 textFormat: Text.PlainText
                 text: root.focusedMonitor
                 // Only worth naming when more than one display is in play.
-                visible: root.focusedMonitor !== "" && root.enabledDisplayCount > 1
+                visible: !root.arranged && root.focusedMonitor !== "" && root.enabledDisplayCount > 1
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -767,6 +963,7 @@ Panel {
 
             Grid {
               id: scaleRow
+              visible: !root.perDisplay || !root.arranged
               width: parent.width
               columns: root.scaleValues.length
               spacing: Style.spacing.xs
@@ -790,6 +987,63 @@ Panel {
             }
           }
 
+          // Per display: a row of scales for each display, display 1 first.
+          Column {
+            visible: root.arranged && root.perDisplay
+            width: parent.width
+            spacing: Style.spacing.xs
+
+            Repeater {
+              model: arrangement.displays
+
+              Row {
+                id: displayScales
+                required property var modelData
+                required property int index
+
+                readonly property var display: root.displayNamed(modelData.name)
+                readonly property var values: display ? Model.availableScales(root.scalePresets, display.width, display.height) : []
+                readonly property int active: display ? Model.closestScaleIndex(values, root.liveScale(modelData.name), display.width, display.height) : -1
+
+                width: parent.width
+                spacing: Style.spacing.xs
+
+                Item {
+                  width: Style.space(24)
+                  height: rowBadge.height
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  DisplayBadge {
+                    id: rowBadge
+                    number: displayScales.index + 1
+                    size: Style.font.caption * 1.6
+                    color: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                  }
+                }
+
+                Repeater {
+                  model: displayScales.values
+
+                  Button {
+                    required property string modelData
+                    required property int index
+                    text: displayScales.display ? Model.cleanScale(modelData, displayScales.display.width, displayScales.display.height) + "x" : ""
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                    horizontalPadding: Style.spacing.sm
+                    verticalPadding: Style.spacing.controlPaddingY
+                    bordered: true
+                    width: (displayScales.width - Style.space(24) - displayScales.spacing * displayScales.values.length) / displayScales.values.length
+                    active: displayScales.active === index
+                    onClicked: root.setScale(modelData, displayScales.modelData.name, true)
+                  }
+                }
+              }
+            }
+          }
+
           // ---------- Monitors ----------
           PanelSeparator {
             visible: root.displays.length > 1
@@ -801,14 +1055,46 @@ Panel {
             spacing: Style.space(10)
             visible: root.displays.length > 1
 
-            PanelSectionHeader {
-              text: "DISPLAYS"
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(displaysHeader.implicitHeight, identifyButton.implicitHeight)
+
+              PanelSectionHeader {
+                id: displaysHeader
+                text: "DISPLAYS"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Button {
+                id: identifyButton
+                visible: root.arranged
+                text: "Identify"
+                fontSize: Style.font.caption
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                horizontalPadding: Style.spacing.sm
+                verticalPadding: Style.spacing.controlPaddingY
+                bordered: true
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: root.identify()
+              }
+            }
+
+            // Drag a display to arrange; ★ in a row makes that display main.
+            Arrangement {
+              id: arrangement
+              width: parent.width
+              visible: root.arranged
+              bar: root.bar
+              mainName: root.mainName
             }
 
             Repeater {
-              model: root.displays
+              model: root.rows
 
               MonitorRow {
                 required property var modelData
@@ -874,6 +1160,8 @@ Panel {
 
     Row {
       id: monitorInner
+      // Above the row's own click area, so the ★ gets its clicks.
+      z: 1
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -881,25 +1169,49 @@ Panel {
       anchors.rightMargin: Style.space(6)
       spacing: Style.space(8)
 
+      Item {
+        width: Style.space(22)
+        height: rowBadge.height
+        anchors.verticalCenter: parent.verticalCenter
+
+        // The display number, once there is more than one to tell apart.
+        DisplayBadge {
+          id: rowBadge
+          anchors.horizontalCenter: parent.horizontalCenter
+          number: root.enabledDisplayCount > 1 ? monitorRow.display.number || 0 : 0
+          size: Style.font.title * 1.4
+          color: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+        }
+      }
+
       Text {
-        text: "󰍹"
+        textFormat: Text.PlainText
+        text: Model.displayLabel(monitorRow.display) + (monitorRow.display.focused ? " · focused" : "")
         color: root.bar.foreground
         font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.title
-        width: Style.space(22)
-        horizontalAlignment: Text.AlignHCenter
+        font.pixelSize: Style.font.body
+        elide: Text.ElideRight
+        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16) - (root.arranged ? Style.space(24) : 0)
         anchors.verticalCenter: parent.verticalCenter
       }
 
       Text {
         textFormat: Text.PlainText
-        text: monitorRow.display.name + (monitorRow.display.focused ? " · focused" : "")
+        visible: root.arranged
+        text: monitorRow.display.name === root.mainName ? "★" : "☆"
         color: root.bar.foreground
         font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.body
-        elide: Text.ElideRight
-        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16)
+        font.pixelSize: Style.font.subtitle
+        width: Style.space(16)
+        horizontalAlignment: Text.AlignHCenter
         anchors.verticalCenter: parent.verticalCenter
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.setMain(monitorRow.display.name)
+        }
       }
 
       Text {
