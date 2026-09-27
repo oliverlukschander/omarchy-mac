@@ -75,4 +75,21 @@ assertDeepEqual(
 )
 
 assertDeepEqual(monitor.parseDisplays('{'), { displays: [], enabledDisplayCount: 0 }, 'monitor handles invalid display JSON')
+
+assertDeepEqual(
+  monitor.displayToggleCommand('HDMI-A-1', true),
+  ['hyprctl', 'eval', 'hl.monitor({ output = "HDMI-A-1", disabled = true })'],
+  'monitor disables an external display through the Lua config'
+)
+assertDeepEqual(
+  monitor.displayToggleCommand('HDMI-A-1', false),
+  ['hyprctl', 'eval', 'hl.monitor({ output = "HDMI-A-1", mode = "preferred", position = "auto", scale = "auto", disabled = false })'],
+  'monitor re-enables an external display with a complete rule'
+)
+assertDeepEqual(
+  monitor.displayToggleCommand('eDP-1', true),
+  ['omarchy-hyprland-monitor-internal', 'off'],
+  'monitor switches the internal panel through its own command'
+)
+assertEqual(monitor.displayToggleCommand('DP-1"}) os.exit()--', true), null, 'monitor refuses an unsafe display name')
 JS
