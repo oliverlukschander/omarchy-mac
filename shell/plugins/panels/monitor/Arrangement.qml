@@ -106,6 +106,9 @@ Item {
         anchors.fill: parent
         cursorShape: Qt.OpenHandCursor
         drag.target: tile
+        // The panel scrolls when it's taller than the screen; a drag here
+        // moves the display, not the panel.
+        preventStealing: true
         onPressed: root.dragging = true
         onCanceled: root.dragging = false
         onReleased: {
