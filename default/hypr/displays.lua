@@ -544,6 +544,16 @@ function M.main_name()
   return main and present[main].name or ""
 end
 
+-- "each" once any display that's on has been tuned by hand, else "auto".
+function M.scale_mode()
+  for key in pairs(current()) do
+    if state.displays[key].tuned then
+      return "each"
+    end
+  end
+  return "auto"
+end
+
 function M.status()
   local present = current()
   local main = model.main(present)

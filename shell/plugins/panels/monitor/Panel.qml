@@ -32,6 +32,11 @@ Panel {
   // monitors, which hides the arrangement), and whether Identify is showing.
   property string mainName: ""
   property bool identifying: false
+  // With the display module and two or more displays, scale is Automatic
+  // (set main's, the others follow) or Per display (each tuned by hand).
+  readonly property bool arranged: mainName !== "" && displays.length > 1
+  property bool perDisplay: false
+  readonly property string scaleTarget: arranged ? mainName : focusedMonitor
 
   // Carry sub-notch touchpad deltas between wheel events.
   property real wheelAccumulator: 0
@@ -49,12 +54,23 @@ Panel {
   // signal so keyboard cursor and pointer share one highlight.
   readonly property var scalePresets: ["1", "1.25", "1.6", "2", "3", "4"]
   readonly property var scaleValues: {
+    var display = displayNamed(scaleTarget)
+    return display ? Model.availableScales(scalePresets, display.width, display.height) : scalePresets
+  }
+
+  function displayNamed(name) {
     for (var i = 0; i < displays.length; i++) {
-      var display = displays[i]
-      if (display && display.focused)
-        return Model.availableScales(scalePresets, display.width, display.height)
+      if (displays[i] && displays[i].name === name) return displays[i]
     }
-    return scalePresets
+    return null
+  }
+
+  function liveScale(name) {
+    var values = Hyprland.monitors.values
+    for (var i = 0; i < values.length; i++) {
+      if (values[i].name === name) return values[i].scale
+    }
+    return monitorScale
   }
   property string focusSection: "scale"
   property int selectedIndex: 0
@@ -235,6 +251,14 @@ Panel {
     function hide() { root.close() }
   }
 
+  // Automatic drops any hand tuning, so every display matches main again.
+  function setScaleMode(each) {
+    root.perDisplay = each
+    if (each) return
+    actionProc.command = ["hyprctl", "eval", "omarchy_displays.match_all()"]
+    if (!actionProc.running) actionProc.running = true
+  }
+
   function setMain(name) {
     actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_main(\"" + name + "\")"]
     if (!actionProc.running) actionProc.running = true
@@ -284,20 +308,13 @@ Panel {
   }
 
   function activeScaleIndex() {
-    for (var i = 0; i < displays.length; i++) {
-      var display = displays[i]
-      if (display && display.focused)
-        return Model.matchingScaleIndex(scaleValues, monitorScale, display.width, display.height)
-    }
-    return -1
+    var display = displayNamed(scaleTarget)
+    return display ? Model.matchingScaleIndex(scaleValues, liveScale(display.name), display.width, display.height) : -1
   }
 
   function effectiveScale(scale) {
-    for (var i = 0; i < displays.length; i++) {
-      var display = displays[i]
-      if (display && display.focused)
-        return Model.cleanScale(scale, display.width, display.height)
-    }
+    var display = displayNamed(scaleTarget)
+    if (display) return Model.cleanScale(scale, display.width, display.height)
     return normalizeScale(scale)
   }
 
@@ -322,8 +339,12 @@ Panel {
     if (!actionProc.running) actionProc.running = true
   }
 
-  function setScale(scale) {
-    actionProc.command = ["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale]
+  function setScale(scale, name) {
+    if (arranged) {
+      actionProc.command = ["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + ")"]
+    } else {
+      actionProc.command = ["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale]
+    }
     if (!actionProc.running) actionProc.running = true
   }
 
@@ -449,10 +470,14 @@ Panel {
 
   Process {
     id: mainProc
-    command: ["hyprctl", "repl", "return omarchy_displays and omarchy_displays.main_name() or ''"]
+    command: ["hyprctl", "repl", "return omarchy_displays and (omarchy_displays.main_name() .. ' ' .. omarchy_displays.scale_mode()) or ''"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.mainName = String(text || "").trim()
+      onStreamFinished: {
+        var fields = String(text || "").trim().split(" ")
+        root.mainName = fields[0] || ""
+        if (fields[1] === "each") root.perDisplay = true
+      }
     }
   }
 
@@ -813,6 +838,30 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
               }
 
+              Row {
+                visible: root.arranged
+                spacing: Style.spacing.xs
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+
+                Repeater {
+                  model: [{ label: "Automatic", each: false }, { label: "Per display", each: true }]
+
+                  Button {
+                    required property var modelData
+                    text: modelData.label
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                    horizontalPadding: Style.spacing.sm
+                    verticalPadding: Style.spacing.controlPaddingY
+                    bordered: true
+                    active: root.perDisplay === modelData.each
+                    onClicked: root.setScaleMode(modelData.each)
+                  }
+                }
+              }
+
               // Name the monitor SCALE targets, since it only applies to the
               // focused one.
               Text {
@@ -820,7 +869,7 @@ Panel {
                 textFormat: Text.PlainText
                 text: root.focusedMonitor
                 // Only worth naming when more than one display is in play.
-                visible: root.focusedMonitor !== "" && root.enabledDisplayCount > 1
+                visible: !root.arranged && root.focusedMonitor !== "" && root.enabledDisplayCount > 1
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -833,6 +882,7 @@ Panel {
 
             Grid {
               id: scaleRow
+              visible: !root.perDisplay || !root.arranged
               width: parent.width
               columns: root.scaleValues.length
               spacing: Style.spacing.xs
@@ -851,6 +901,59 @@ Panel {
                   scaleValue: modelData
                   scaleIndex: index
                   width: scaleRow.cellWidth
+                }
+              }
+            }
+          }
+
+          // Per display: a row of scales for each display, D1 first.
+          Column {
+            visible: root.arranged && root.perDisplay
+            width: parent.width
+            spacing: Style.spacing.xs
+
+            Repeater {
+              model: arrangement.displays
+
+              Row {
+                id: displayScales
+                required property var modelData
+                required property int index
+
+                readonly property var display: root.displayNamed(modelData.name)
+                readonly property var values: display ? Model.availableScales(root.scalePresets, display.width, display.height) : []
+                readonly property int active: display ? Model.matchingScaleIndex(values, root.liveScale(modelData.name), display.width, display.height) : -1
+
+                width: parent.width
+                spacing: Style.spacing.xs
+
+                Text {
+                  text: "D" + (displayScales.index + 1)
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  width: Style.space(24)
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Repeater {
+                  model: displayScales.values
+
+                  Button {
+                    required property string modelData
+                    required property int index
+                    text: displayScales.display ? Model.cleanScale(modelData, displayScales.display.width, displayScales.display.height) + "x" : ""
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                    horizontalPadding: Style.spacing.sm
+                    verticalPadding: Style.spacing.controlPaddingY
+                    bordered: true
+                    width: (displayScales.width - Style.space(24) - displayScales.spacing * displayScales.values.length) / displayScales.values.length
+                    active: displayScales.active === index
+                    onClicked: root.setScale(modelData, displayScales.modelData.name)
+                  }
                 }
               }
             }
