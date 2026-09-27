@@ -53,7 +53,7 @@ local choosing = 0
 local function read_live()
   local monitors = {}
   for _, monitor in ipairs(hl.get_monitors() or {}) do
-    if not model.is_virtual(monitor.name) and not monitor.is_mirror and monitor.width > 0 and monitor.scale > 0 then
+    if monitor.name and not model.is_virtual(monitor.name) and not monitor.is_mirror and (monitor.width or 0) > 0 and (monitor.scale or 0) > 0 then
       monitors[#monitors + 1] = {
         name = monitor.name,
         description = monitor.description or "",
@@ -189,13 +189,24 @@ local function park(present)
   if not main then
     return
   end
+  -- A display Hyprland still lists isn't gone, even one that has no mode yet
+  -- while it comes back on.
+  local listed = {}
+  for _, monitor in ipairs(hl.get_monitors() or {}) do
+    if monitor.name and not model.is_virtual(monitor.name) then
+      listed[#listed + 1] = { name = monitor.name, description = monitor.description or "", serial = monitor.serial or "" }
+    end
+  end
   local home = {}
-  for key in pairs(present) do
-    home[state.displays[key].block] = true
+  for _, m in ipairs(model.identify(listed)) do
+    local display = state.displays[m.key]
+    if display and display.block then
+      home[display.block] = true
+    end
   end
   for _, workspace in ipairs(hl.get_workspaces() or {}) do
     local id = workspace.id
-    if id > 0 and not workspace.special and not home[(id - 1) // 10] and workspace.monitor and workspace.monitor.name ~= present[main].name then
+    if id and id > 0 and not workspace.special and not home[(id - 1) // 10] and workspace.monitor and workspace.monitor.name ~= present[main].name then
       hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(id), monitor = present[main].name }))
     end
   end

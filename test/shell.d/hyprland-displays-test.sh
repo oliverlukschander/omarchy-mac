@@ -795,6 +795,15 @@ eq(H.workspaces[11] .. " " .. H.workspaces[13], "eDP-1 eDP-1", "the BenQ's works
 eq(H.workspaces[41], "USB-4", "the Dell keeps its own")
 connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
 settle()
+
+-- A display that comes back on without a mode yet (0x0) is not gone: its
+-- workspaces stay home instead of being parked on main again.
+H.workspaces = { [1] = "eDP-1", [11] = "USB-2" }
+H.outputs["USB-2"].width, H.outputs["USB-2"].height = 0, 0
+fire("monitor.layout_changed")
+eq(H.workspaces[11], "USB-2", "a display still coming up keeps its workspaces")
+H.outputs["USB-2"].width, H.outputs["USB-2"].height = 2560, 1440
+settle()
 H.workspaces = {}
 
 -- Scale: a display seen for the first time matches main; SUPER+/ on main
