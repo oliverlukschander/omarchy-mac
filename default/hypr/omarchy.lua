@@ -29,12 +29,15 @@ require("default.hypr.qconsole")
 require("default.hypr.monitor-removal")
 require("default.hypr.input")
 require("default.hypr.windows")
-require("default.hypr.displays")
 
 -- A platform package's settings (hypr/settings/*.lua), loaded
 -- after Omarchy's defaults so they replace them, and before the theme and the
 -- user's files so those replace theirs.
 platform.load("settings")
+
+-- After the platform's settings: per-display workspaces turn a platform's
+-- numbered swipe stepping back off. The theme and the user's files still win.
+require("default.hypr.displays")
 
 -- Current theme overrides.
 require_optional.module("omarchy.current.theme.hyprland")
