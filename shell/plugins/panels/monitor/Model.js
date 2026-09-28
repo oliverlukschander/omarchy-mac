@@ -129,11 +129,14 @@ function parseDisplays(raw) {
   }
 }
 
-// Where a display dragged in the arrangement lands: flush against the edge
+// Where a display dragged in the arrangement lands: flush against the side
 // of another display nearest to where it was dropped, never overlapping one.
-// Along that edge it snaps to the ends or the centre when it's close, and
-// otherwise keeps at least a pixel of edge shared. Rects are logical pixels
-// { x, y, w, h }; others must not be empty.
+// Nearness counts in display sizes, the two displays' mean width across and
+// mean height up and down, so a display dragged past the middle of another
+// lands on its far side, and one dragged mostly up or down lands above or
+// below it. Along that side it snaps to the ends or the centre when it's
+// close, and otherwise keeps at least a pixel of edge shared. Rects are
+// logical pixels { x, y, w, h }; others must not be empty.
 function snapPosition(others, moving) {
   function overlaps(a, b) {
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
@@ -159,6 +162,8 @@ function snapPosition(others, moving) {
       { x: x, y: o.y + o.h },
       { x: x, y: o.y - moving.h }
     ]
+    var across = (o.w + moving.w) / 2
+    var upDown = (o.h + moving.h) / 2
 
     for (var j = 0; j < candidates.length; j++) {
       var c = { x: Math.round(candidates[j].x), y: Math.round(candidates[j].y), w: moving.w, h: moving.h }
@@ -166,7 +171,7 @@ function snapPosition(others, moving) {
       for (var k = 0; k < others.length; k++) {
         if (overlaps(c, others[k])) free = false
       }
-      var distance = Math.hypot(c.x - moving.x, c.y - moving.y)
+      var distance = Math.hypot((c.x - moving.x) / across, (c.y - moving.y) / upDown)
       if (free && (best === null || distance < best.distance)) best = { x: c.x, y: c.y, distance: distance }
     }
   }

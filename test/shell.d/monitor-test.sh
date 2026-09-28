@@ -38,6 +38,22 @@ assertDeepEqual(
   { x: 1100, y: -600 },
   'monitor arrangement moves a display dropped onto others to the nearest free edge'
 )
+// A 1280x720 display right of the laptop, dragged left over it.
+assertDeepEqual(
+  monitor.snapPosition([laptop], { x: -100, y: 0, w: 1280, h: 720 }),
+  { x: -1280, y: 0 },
+  'monitor arrangement puts a display dragged past the middle of another on its far side'
+)
+assertDeepEqual(
+  monitor.snapPosition([laptop], { x: 200, y: 0, w: 1280, h: 720 }),
+  { x: 1152, y: 0 },
+  'monitor arrangement keeps a display not dragged past the middle on its side'
+)
+assertDeepEqual(
+  monitor.snapPosition([laptop], { x: 130, y: -550, w: 1280, h: 720 }),
+  { x: 130, y: -720 },
+  'monitor arrangement puts a display dragged up over another above it'
+)
 
 assertEqual(monitor.clampBrightness(0), 1, 'monitor clamps minimum brightness')
 assertEqual(monitor.clampBrightness(101), 100, 'monitor clamps maximum brightness')
