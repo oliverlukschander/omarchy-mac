@@ -30,9 +30,10 @@ Panel {
   property var displays: []
   property int enabledDisplayCount: 0
   // The display module's main display ("" while the module isn't managing
-  // monitors, which hides the arrangement), and whether Identify is showing.
+  // monitors, which hides the arrangement), and the display Identify is
+  // showing its number on: a connector, "*" for every display, or "".
   property string mainName: ""
-  property bool identifying: false
+  property string identifying: ""
   // With the display module and two or more displays on, scale is Linked
   // displays (every display in proportion to main) or Per display (each
   // tuned by hand). The scale row is always for the display this panel
@@ -289,9 +290,10 @@ Panel {
     run(["hyprctl", "eval", "omarchy_displays.move(\"" + name + "\", " + x + ", " + y + ")"])
   }
 
-  // Shows each display's number big on that display for a moment.
-  function identify() {
-    root.identifying = true
+  // Shows a display's number big on that display for a moment, or every
+  // display's without a name.
+  function identify(name) {
+    root.identifying = name || "*"
     identifyTimer.restart()
   }
 
@@ -518,16 +520,19 @@ Panel {
   Timer {
     id: identifyTimer
     interval: 2000
-    onTriggered: root.identifying = false
+    onTriggered: root.identifying = ""
   }
 
   Variants {
-    model: root.identifying ? Quickshell.screens : []
+    model: root.identifying !== "" ? Quickshell.screens : []
 
     PanelWindow {
+      id: identifyWindow
       required property var modelData
+      readonly property var monitor: Hyprland.monitorFor(modelData)
 
       screen: modelData
+      visible: root.identifying === "*" || (!!monitor && monitor.name === root.identifying)
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore
@@ -536,14 +541,13 @@ Panel {
       WlrLayershell.layer: WlrLayer.Overlay
 
       Column {
-        readonly property var monitor: Hyprland.monitorFor(modelData)
         anchors.centerIn: parent
 
         DisplayBadge {
           anchors.horizontalCenter: parent.horizontalCenter
           number: {
             for (var i = 0; i < arrangement.displays.length; i++) {
-              if (parent.monitor && arrangement.displays[i].name === parent.monitor.name) return i + 1
+              if (identifyWindow.monitor && arrangement.displays[i].name === identifyWindow.monitor.name) return i + 1
             }
             return 0
           }
@@ -561,7 +565,7 @@ Panel {
         Text {
           anchors.horizontalCenter: parent.horizontalCenter
           textFormat: Text.PlainText
-          text: parent.monitor ? Model.displayLabel(root.displayNamed(parent.monitor.name)) : ""
+          text: identifyWindow.monitor ? Model.displayLabel(root.displayNamed(identifyWindow.monitor.name)) : ""
           color: "white"
           style: Text.Outline
           styleColor: Qt.rgba(0, 0, 0, 0.6)
@@ -1102,14 +1106,17 @@ Panel {
               }
             }
 
-            // Drag a display to arrange; ★ in a row makes that display main.
+            // Drag a display to arrange, click it to see its number on it;
+            // ★ in a row makes that display main.
             Arrangement {
               id: arrangement
               width: parent.width
               visible: root.arranged
               bar: root.bar
               mainName: root.mainName
+              identified: root.identifying
               onMoveRequested: function(name, x, y) { root.moveDisplay(name, x, y) }
+              onIdentifyRequested: function(name) { root.identify(name) }
             }
 
             Repeater {
