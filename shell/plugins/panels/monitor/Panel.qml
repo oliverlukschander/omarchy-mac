@@ -21,6 +21,9 @@ Panel {
   property int pendingBrightnessPercent: 0
   property bool brightnessSetQueued: false
   property bool brightnessAvailable: false
+  // The display the brightness is for: the focused one, or the built-in
+  // panel when the focused display can't be dimmed.
+  property string brightnessMonitor: ""
   property string internalMonitor: ""
   property string externalMonitor: ""
   property string focusedMonitor: ""
@@ -334,7 +337,7 @@ Panel {
     }
 
     root.brightnessSetQueued = false
-    setBrightnessProc.command = ["omarchy-brightness-display", "--no-osd", "--monitor", root.focusedMonitor, percent + "%"]
+    setBrightnessProc.command = ["omarchy-brightness-display", "--no-osd", "--monitor", root.brightnessMonitor || root.focusedMonitor, percent + "%"]
     setBrightnessProc.running = true
   }
 
@@ -488,6 +491,7 @@ Panel {
         root.focusedMonitor = String(lines[5] || "").trim()
         root.monitorScale = root.normalizeScale(String(lines[6] || "").trim())
         root.updateDisplays(String(lines[7] || "[]").trim())
+        root.brightnessMonitor = String(lines[8] || "").trim()
       }
     }
   }
@@ -781,6 +785,19 @@ Panel {
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
                 anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              // Which display it's for, once there are two to tell apart.
+              DisplayBadge {
+                readonly property var target: root.rows.filter(function(d) { return d.name === root.brightnessMonitor })[0]
+                visible: root.arranged && number > 0
+                number: target ? target.number : 0
+                size: Style.font.caption * 1.6
+                color: brightnessHeader.color
+                fontFamily: root.bar.fontFamily
+                anchors.left: brightnessHeader.right
+                anchors.leftMargin: Style.space(4)
                 anchors.verticalCenter: parent.verticalCenter
               }
 
