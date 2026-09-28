@@ -1057,12 +1057,13 @@ Panel {
                   spacing: Style.spacing.xs
 
                   // The number as big as in the display list below, and in
-                  // line with it: that list insets its rows and centres the
-                  // number in a column of its own.
+                  // line with it: that list insets its rows, centres the
+                  // number in a column of its own and starts the name after
+                  // a gap, where the scales start here.
                   Item {
                     id: badgeSlot
                     visible: scaleRow.modelData.number > 0
-                    width: Style.space(28)
+                    width: Style.space(6) + Style.space(22) + Style.space(8) - scaleRow.spacing
                     height: rowBadge.height
                     anchors.verticalCenter: parent.verticalCenter
 
