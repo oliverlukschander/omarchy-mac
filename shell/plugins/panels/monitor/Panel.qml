@@ -823,19 +823,6 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
               }
 
-              // Which display it's for, once there are two to tell apart.
-              DisplayBadge {
-                readonly property var target: root.rows.filter(function(d) { return d.name === root.brightnessMonitor })[0]
-                visible: root.arranged && number > 0
-                number: target ? target.number : 0
-                size: Style.font.caption * 1.6
-                color: brightnessHeader.color
-                fontFamily: root.bar.fontFamily
-                anchors.left: brightnessHeader.right
-                anchors.leftMargin: Style.space(4)
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
               Text {
                 id: brightnessPercent
                 textFormat: Text.PlainText
@@ -859,11 +846,27 @@ Panel {
               foreground: root.bar.foreground
               outline: true
 
+              // Which display it's for, once there are two to tell apart: its
+              // number in the column the scale rows keep theirs in, with the
+              // slider starting where their scales do.
+              DisplayBadge {
+                id: brightnessBadge
+                readonly property var target: root.rows.filter(function(d) { return d.name === root.brightnessMonitor })[0]
+                readonly property bool shown: root.arranged && number > 0
+                visible: shown
+                number: target ? target.number : 0
+                x: Style.space(6) + (Style.space(22) - width) / 2
+                anchors.verticalCenter: parent.verticalCenter
+                size: Style.font.title * 1.4
+                color: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+              }
+
               PanelSlider {
                 id: brightnessSlider
                 bar: root.bar
                 anchors.fill: parent
-                anchors.leftMargin: Style.space(6)
+                anchors.leftMargin: brightnessBadge.shown ? Style.space(36) : Style.space(6)
                 anchors.rightMargin: Style.space(6)
                 minimum: 1
                 maximum: 100
