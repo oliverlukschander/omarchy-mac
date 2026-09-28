@@ -264,10 +264,11 @@ assert(#named.layouts == 0, "and a layout holding it is dropped as a whole, not 
 local bar = store.sanitize({ version = 1, connectors = { ["USB-2"] = 1, ["eDP-1"] = 0, ["DP-1"] = 100, [3] = 2, ["HDMI-A-1"] = "x" } }).connectors
 assert(bar["USB-2"] == 1 and bar["eDP-1"] == 0 and bar["DP-1"] == nil and bar["HDMI-A-1"] == nil, "the bar's connector blocks are kept when valid")
 local kept = store.sanitize(store.decode(store.encode({
-  version = 1, factor = 1.07, main = "desc:X",
-  displays = { ["desc:X"] = { selector = "desc:X", size = { 1, 1 }, scale = 1, tuned = true } },
+  version = 1, factor = 1.07, main = "desc:X", scale_mode = "each",
+  displays = { ["desc:X"] = { selector = "desc:X", size = { 1, 1 }, scale = 1 } },
 })))
-assert(kept.factor == 1.07 and kept.main == "desc:X" and kept.displays["desc:X"].tuned == true, "factor, main and tuning are kept")
+assert(kept.factor == 1.07 and kept.main == "desc:X" and kept.scale_mode == "each", "factor, main and the scale mode are kept")
+assert(store.sanitize({ version = 1, scale_mode = "auto" }).scale_mode == nil, "an unknown scale mode is linked")
 assert(clean.displays["desc:ok"].scale == 2, "stored scales snap to k/120")
 assert(#clean.layouts == 1, "invalid layouts are dropped")
 assert(#store.sanitize({ version = 99 }).layouts == 0, "unknown versions start fresh")
@@ -894,13 +895,15 @@ settle()
 eq(H.outputs["USB-2"].scale, 1.6, "with its EDID back, the BenQ keeps its scale")
 H.windows = {}
 
--- Scale: a display seen for the first time matches main; SUPER+/ on main
--- takes the others along, a display tuned by hand keeps its scale and
--- teaches the desk factor, and SUPER+CTRL+/ matches everything to main again.
+-- Scale: a display seen for the first time matches main. Linked, a change on
+-- any display keeps them all in proportion. Per display, each keeps its own
+-- scale, and one set against the panel teaches the desk factor. The mode is
+-- remembered until it's changed; SUPER+CTRL+/ matches everything to main.
 H.outputs["eDP-1"].physical = 346
 connect("USB-7", "SAM Odyssey G7 H4ZR", "H4ZR", 2560, 1440, 1, 597)
 settle()
 eq(H.outputs["USB-7"].scale, 1.6, "a new 27-inch 1440p matches the panel at 3")
+eq(omarchy_displays.scale_mode(), "linked", "scaling is linked until Per display is chosen")
 H.focused = "eDP-1"
 omarchy_displays.step_scale(-1)
 settle()
@@ -910,20 +913,24 @@ H.focused = "USB-7"
 omarchy_displays.step_scale(1)
 settle()
 eq(H.outputs["USB-7"].scale, 1.25, "SUPER+/ on the Odyssey takes it to 1.25")
-eq(H.outputs["eDP-1"].scale, 2.4, "automatically, main moves to match it (2.4, the nearest clean scale)")
+eq(H.outputs["eDP-1"].scale, 2.4, "linked, main moves to match it (2.4, the nearest clean scale)")
 omarchy_displays.set_scale("eDP-1", 2)
 settle()
 eq(H.outputs["USB-7"].scale, 1, "and back with main")
-omarchy_displays.set_scale("USB-7", 1.25, true)
+omarchy_displays.set_scale_mode("each")
+omarchy_displays.set_scale("USB-7", 1.25)
 settle()
-eq(H.outputs["USB-7"].scale, 1.25, "the Odyssey is tuned by hand")
-eq(H.outputs["eDP-1"].scale, 2, "tuning by hand leaves main alone")
+eq(H.outputs["USB-7"].scale, 1.25, "per display, the Odyssey is set on its own")
+eq(H.outputs["eDP-1"].scale, 2, "and main is left alone")
 H.focused = "eDP-1"
 omarchy_displays.step_scale(1)
 settle()
 eq(H.outputs["eDP-1"].scale, 3, "the panel steps back up to 3")
-eq(H.outputs["USB-7"].scale, 1.25, "a hand-tuned display keeps its scale when main changes")
-eq(omarchy_displays.scale_mode(), "each", "with a display tuned by hand, scaling is per display")
+eq(H.outputs["USB-7"].scale, 1.25, "per display, the Odyssey keeps its scale when main changes")
+load_config()
+settle()
+eq(omarchy_displays.scale_mode(), "each", "Per display is remembered")
+eq(H.outputs["USB-7"].scale, 1.25, "and a reload keeps each display's own scale, not one matched to main")
 omarchy_displays.set_scale("USB-7", 1.6)
 settle()
 eq(H.outputs["eDP-1"].scale, 3, "per display, another display's scale leaves main alone")
@@ -931,7 +938,16 @@ eq(omarchy_displays.main_name(), "eDP-1", "main is the panel")
 omarchy_displays.match_all()
 settle()
 eq(H.outputs["USB-7"].scale, 1.6, "match all keeps the proportion learned from tuning: 1.6 next to main at 3")
-eq(omarchy_displays.scale_mode(), "auto", "after match all, scaling is automatic again")
+eq(omarchy_displays.scale_mode(), "each", "matching everything to main keeps Per display")
+omarchy_displays.set_scale_mode("linked")
+eq(omarchy_displays.scale_mode(), "linked", "Linked is chosen again")
+H.focused = "eDP-1"
+omarchy_displays.step_scale(1)
+settle()
+assert(H.outputs["USB-7"].scale > 1.6, "linked, the Odyssey follows main up again")
+omarchy_displays.step_scale(-1)
+settle()
+eq(H.outputs["USB-7"].scale, 1.6, "and back down")
 disconnect("USB-7")
 settle()
 

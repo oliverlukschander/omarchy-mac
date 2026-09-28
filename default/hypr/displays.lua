@@ -459,12 +459,14 @@ local function reflowed(live, sizes)
   return present
 end
 
--- A display comes back at its remembered rotation. Its scale matches main
--- unless it was tuned by hand; without EDID sizes it keeps its last scale.
+-- A display comes back at its remembered rotation. Linked, its scale matches
+-- main; per display, one seen before keeps its own. Without EDID sizes it
+-- keeps its last scale.
 local function remembered(m, main)
   local display = state.displays[m.key]
-  local derived = main and not (display and display.tuned) and model.derived_scale(m, main, state.factor or model.DESK_FACTOR)
-  local scale = derived or (display and display.scale)
+  local own = state.scale_mode == "each" and display and display.scale
+  local derived = not own and main and model.derived_scale(m, main, state.factor or model.DESK_FACTOR)
+  local scale = own or derived or (display and display.scale)
   local transform = display and display.transform or m.transform
   if not scale or (scale == m.scale and transform == m.transform) then
     return m
@@ -577,39 +579,50 @@ local function rescale(live, scales)
   commit(present, true)
 end
 
+-- The scales that keep every display on in proportion to main at
+-- reference.scale; one without EDID sizes keeps its own.
+local function linked(live, main, reference)
+  local scales = { [main] = reference.scale }
+  for key, d in pairs(live) do
+    if key ~= main then
+      scales[key] = model.derived_scale(d, reference, state.factor or model.DESK_FACTOR)
+    end
+  end
+  return scales
+end
+
 -- Give the display on connector `name` a new scale, snapped to a clean one.
--- Linked (while no display is tuned by hand), every display keeps in
--- proportion to main: setting another display's scale moves main to match,
--- and the others follow main. Tuned by hand (by_hand, or once any display
--- is) a display other than main keeps its own scale, which also teaches the
--- desk factor. Used by SUPER+/ and by the Monitor panel.
-function M.set_scale(name, scale, by_hand)
+-- Linked, every display keeps in proportion to main: setting another
+-- display's scale moves main to match, and the others follow main. Per
+-- display, only that display changes; one other than main set against it
+-- also teaches the desk factor. Used by SUPER+/ and by the Monitor panel.
+function M.set_scale(name, scale)
   if inactive or type(scale) ~= "number" or scale < 0.25 then
     return
   end
 
   local live = read_live()
   local main = model.main(live)
-  local factor = state.factor or model.DESK_FACTOR
-  by_hand = by_hand or M.scale_mode() == "each"
   for key, m in pairs(live) do
     if m.name == name then
       local chosen = model.moved(m, m.x, m.y)
       chosen.scale = model.clean_scale(scale, m.width, m.height)
-      local scales = { [key] = chosen.scale }
+      local scales
 
-      if key ~= main and by_hand then
-        state.displays[key].tuned = true
-        state.factor = model.desk_factor(chosen, live[main]) or state.factor
+      if state.scale_mode == "each" then
+        scales = { [key] = chosen.scale }
+        if key ~= main then
+          state.factor = model.desk_factor(chosen, live[main]) or state.factor
+        end
       else
         local reference = model.moved(live[main], 0, 0)
-        reference.scale = key == main and chosen.scale or model.main_scale_for(chosen, live[main], factor) or reference.scale
-        scales[main] = reference.scale
-        for other, d in pairs(live) do
-          if other ~= key and other ~= main and not state.displays[other].tuned then
-            scales[other] = model.derived_scale(d, reference, factor)
-          end
+        if key == main then
+          reference.scale = chosen.scale
+        else
+          reference.scale = model.main_scale_for(chosen, live[main], state.factor or model.DESK_FACTOR) or reference.scale
         end
+        scales = linked(live, main, reference)
+        scales[key] = chosen.scale
       end
 
       rescale(live, scales)
@@ -618,19 +631,30 @@ function M.set_scale(name, scale, by_hand)
   end
 end
 
--- SUPER+CTRL+/: every display back to the scale that matches main, dropping
--- the hand-tuned ones.
+-- SUPER+CTRL+/, and choosing Linked: every display back to the scale that
+-- matches main.
 function M.match_all()
   if inactive then
     return
   end
   local live = read_live()
-  for key in pairs(live) do
-    state.displays[key].tuned = nil
-  end
   local main = model.main(live)
   if main then
-    M.set_scale(live[main].name, live[main].scale)
+    rescale(live, linked(live, main, live[main]))
+  end
+end
+
+-- Linked ("linked") or Per display ("each"), for the Monitor panel. The choice
+-- is kept until it's changed again; choosing Linked matches every display to
+-- main.
+function M.set_scale_mode(mode)
+  if inactive then
+    return
+  end
+  state.scale_mode = mode == "each" and "each" or nil
+  store.save(state)
+  if not state.scale_mode then
+    M.match_all()
   end
 end
 
@@ -765,14 +789,9 @@ function M.main_name()
   return main and present[main].name or ""
 end
 
--- "each" once any display that's on has been tuned by hand, else "auto".
+-- "each" while scaling is per display, else "linked".
 function M.scale_mode()
-  for key in pairs(current()) do
-    if state.displays[key].tuned then
-      return "each"
-    end
-  end
-  return "auto"
+  return state.scale_mode or "linked"
 end
 
 function M.status()
