@@ -87,6 +87,17 @@ Panel {
     return null
   }
 
+  // Linked, the scale every display would get for each preset of each
+  // display (the module's linked_preview), and the preset under the pointer
+  // or keyboard cursor, so the other rows can show where they'd land.
+  property var linkedPreview: ({})
+  readonly property var previewFrom: {
+    var scales = cursorActive && arranged && !perDisplay ? scaleRow(focusSection) : null
+    return scales && selectedIndex >= 0 && selectedIndex < scales.values.length
+      ? { name: scales.name, preset: scales.values[selectedIndex] }
+      : null
+  }
+
   // The display rows, in display order (display 1 first), those that are off
   // last.
   readonly property var rows: Model.numberedDisplays(displays, arrangement.displays.map(function(d) { return d.name }))
@@ -322,6 +333,7 @@ Panel {
   function refresh() {
     if (!stateProc.running) stateProc.running = true
     if (!mainProc.running) mainProc.running = true
+    if (!previewProc.running) previewProc.running = true
     // Quickshell's monitor list doesn't follow scale changes by itself.
     Hyprland.refreshMonitors()
   }
@@ -535,6 +547,21 @@ Panel {
         var known = Hyprland.monitors.values.some(function(m) { return m.name === fields[0] })
         root.mainName = known ? fields[0] : ""
         root.perDisplay = fields[1] === "each"
+      }
+    }
+  }
+
+  Process {
+    id: previewProc
+    command: ["hyprctl", "repl", "return omarchy_displays and omarchy_displays.linked_preview() or '{}'"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          root.linkedPreview = JSON.parse(String(text || "{}")) || {}
+        } catch (e) {
+          root.linkedPreview = {}
+        }
       }
     }
   }
@@ -1011,6 +1038,16 @@ Panel {
                   required property var modelData
 
                   readonly property int active: root.activeScaleIndex(modelData)
+                  // Linked, the preset this display lands on for the one
+                  // under the cursor in another row.
+                  readonly property int landing: {
+                    var from = root.previewFrom
+                    var presets = from && from.name !== modelData.name ? root.linkedPreview[from.name] : null
+                    var scale = presets && presets[from.preset] ? presets[from.preset][modelData.name] : undefined
+                    return scale !== undefined && modelData.width > 0
+                      ? Model.closestScaleIndex(Array.from(modelData.values), scale, modelData.width, modelData.height)
+                      : -1
+                  }
                   readonly property int count: modelData.values.length
                   readonly property real pillWidth: count > 0
                     ? (width - (modelData.number > 0 ? badgeSlot.width + spacing : 0) - spacing * (count - 1)) / count
@@ -1050,6 +1087,7 @@ Panel {
                       scaleValue: modelData
                       scaleIndex: index
                       active: scaleRow.active === index
+                      previewed: scaleRow.landing === index
                       width: scaleRow.pillWidth
                     }
                   }
@@ -1140,6 +1178,8 @@ Panel {
     required property var scales
     required property string scaleValue
     required property int scaleIndex
+    // Where this display lands, Linked, for the preset under the cursor.
+    property bool previewed: false
 
     text: root.effectiveScale(scales, scaleValue) + "x"
     fontSize: Style.font.caption
@@ -1149,7 +1189,7 @@ Panel {
     verticalPadding: Style.spacing.controlPaddingY
     bordered: true
 
-    hasCursor: root.cursorActive && root.focusSection === scales.section && root.selectedIndex === scaleIndex
+    hasCursor: previewed || (root.cursorActive && root.focusSection === scales.section && root.selectedIndex === scaleIndex)
 
     onClicked: root.setScale(scaleValue, scales.name)
     onHovered: function(isHovered) {

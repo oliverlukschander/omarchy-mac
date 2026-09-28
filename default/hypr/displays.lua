@@ -657,6 +657,22 @@ local function linked(live, main, reference)
   return scales
 end
 
+-- Linked, the scales when display `key` is set to the clean `scale`: main
+-- moves to the scale that derives it, and the others follow main.
+local function linked_for(live, main, key, scale)
+  local chosen = model.moved(live[key], live[key].x, live[key].y)
+  chosen.scale = scale
+  local reference = model.moved(live[main], 0, 0)
+  if key == main then
+    reference.scale = scale
+  else
+    reference.scale = model.main_scale_for(chosen, live[main], state.factor or model.DESK_FACTOR) or reference.scale
+  end
+  local scales = linked(live, main, reference)
+  scales[key] = scale
+  return scales
+end
+
 -- Give the display on connector `name` a new scale, snapped to a clean one.
 -- Linked, every display keeps in proportion to main: setting another
 -- display's scale moves main to match, and the others follow main. Per
@@ -681,14 +697,7 @@ function M.set_scale(name, scale)
           state.factor = model.desk_factor(chosen, live[main]) or state.factor
         end
       else
-        local reference = model.moved(live[main], 0, 0)
-        if key == main then
-          reference.scale = chosen.scale
-        else
-          reference.scale = model.main_scale_for(chosen, live[main], state.factor or model.DESK_FACTOR) or reference.scale
-        end
-        scales = linked(live, main, reference)
-        scales[key] = chosen.scale
+        scales = linked_for(live, main, key, chosen.scale)
       end
 
       rescale(live, scales)
@@ -708,6 +717,29 @@ function M.match_all()
   if main then
     rescale(live, linked(live, main, live[main]))
   end
+end
+
+-- For the Monitor panel: Linked, the scale each display that's on would get
+-- for each preset of each display, as JSON { connector = { preset =
+-- { connector = scale } } }. Per display, where nothing else changes, "{}".
+function M.linked_preview()
+  local preview = {}
+  local live = read_live()
+  local main = model.main(live)
+  if main and state.scale_mode ~= "each" then
+    for key, m in pairs(live) do
+      local presets = {}
+      for _, preset in ipairs(model.SCALE_STEPS) do
+        local scales = {}
+        for other, scale in pairs(linked_for(live, main, key, model.clean_scale(preset, m.width, m.height))) do
+          scales[live[other].name] = scale
+        end
+        presets[string.format("%g", preset)] = scales
+      end
+      preview[m.name] = presets
+    end
+  end
+  return store.encode(preview)
 end
 
 -- Linked ("linked") or Per display ("each"), for the Monitor panel. The choice

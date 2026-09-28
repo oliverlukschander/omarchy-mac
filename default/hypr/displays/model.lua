@@ -9,7 +9,9 @@
 
 local M = {}
 
-local SCALE_STEPS = { 1, 1.25, 1.6, 2, 3, 4 }
+-- The presets SUPER+/ steps through and the Monitor panel offers.
+M.SCALE_STEPS = { 1, 1.25, 1.6, 2, 3, 4 }
+local SCALE_STEPS = M.SCALE_STEPS
 
 local function sorted_keys(map)
   local keys = {}
