@@ -6,17 +6,20 @@ import "Model.js" as Model
 // The displays drawn to scale, as the display module arranged them. Drag one
 // to rearrange: an outline shows where it lands, flush against the nearest
 // side of another display, and on release the panel has the module move it
-// there and remember it.
+// there and remember it. Click one to have its number shown on it.
 Item {
   id: root
 
   property var bar
   property string mainName: ""
+  // The display whose number is being shown on it, drawn highlighted.
+  property string identified: ""
   property bool dragging: false
   // Where the display being dragged would land, in logical pixels.
   property var landing: null
 
   signal moveRequested(string name, int x, int y)
+  signal identifyRequested(string name)
 
   implicitHeight: Style.space(130)
 
@@ -109,7 +112,7 @@ Item {
       width: modelData.w * root.zoom
       height: modelData.h * root.zoom
       radius: Style.space(4)
-      color: Qt.alpha(root.bar.foreground, handle.drag.active ? 0.22 : 0.12)
+      color: Qt.alpha(root.bar.foreground, handle.drag.active || root.identified === modelData.name ? 0.22 : 0.12)
       border.width: 1
       border.color: modelData.name === root.mainName ? Color.accent : Qt.alpha(root.bar.foreground, 0.5)
 
@@ -138,6 +141,8 @@ Item {
           root.landing = null
           tile.goHome()
         }
+        // Only a press that didn't turn into a drag.
+        onClicked: root.identifyRequested(tile.modelData.name)
         onReleased: {
           root.dragging = false
           root.landing = null
