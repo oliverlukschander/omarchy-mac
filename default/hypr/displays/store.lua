@@ -1,9 +1,11 @@
 -- Remembered display state in ~/.local/state/omarchy/displays.json:
 --   displays: identity -> { selector, size = { w, h } in pixels, scale,
 --             transform, block (its workspaces are block * 10 + 1..10),
---             tuned (the user set its scale by hand), connector (last seen on) }
+--             connector (last seen on) }
 --   factor:   the learned desk factor (see model.DESK_FACTOR)
 --   main:     the display the user chose as main
+--   scale_mode: "each" when every display keeps its own scale (Per display),
+--             absent while scales are linked to main
 --   global_workspaces: workspaces are global (display-workspaces-off)
 --   connectors: connector -> block of each display that's connected, for
 --             the bar
@@ -214,6 +216,7 @@ local function sanitize(data)
     state.factor = data.factor
   end
   state.main = type(data.main) == "string" and data.main or nil
+  state.scale_mode = data.scale_mode == "each" and "each" or nil
   state.global_workspaces = data.global_workspaces == true or nil
   for name, block in pairs(type(data.connectors) == "table" and data.connectors or {}) do
     block = math.tointeger(block)
@@ -245,7 +248,6 @@ local function sanitize(data)
           scale = scale,
           transform = transform,
           block = block,
-          tuned = display.tuned == true or nil,
         }
         used[block or -1] = true
       end

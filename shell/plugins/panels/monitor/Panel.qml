@@ -36,14 +36,10 @@ Panel {
   property string identifying: ""
   // With the display module and two or more displays on, scale is Linked
   // displays (every display in proportion to main) or Per display (each
-  // tuned by hand). The scale row is always for the display this panel
-  // opened on.
+  // keeps its own), as the module remembers it. The scale row is always for
+  // the display this panel opened on.
   readonly property bool arranged: mainName !== "" && enabledDisplayCount > 1
-  // Per display once the module has a display tuned by hand, or while the
-  // user has picked it in this panel and not tuned anything yet.
-  property bool tunedByHand: false
-  property bool perDisplayChosen: false
-  readonly property bool perDisplay: tunedByHand || perDisplayChosen
+  property bool perDisplay: false
   property var pendingAction: null
   readonly property var panelMonitor: button.QsWindow.window ? Hyprland.monitorFor(button.QsWindow.window.screen) : null
   readonly property string scaleTarget: arranged && panelMonitor ? panelMonitor.name : focusedMonitor
@@ -275,10 +271,11 @@ Panel {
     actionProc.running = true
   }
 
-  // Linked displays drops any hand tuning, so every display matches main again.
+  // The module keeps the choice; Linked displays matches every display to
+  // main again.
   function setScaleMode(each) {
-    root.perDisplayChosen = each
-    if (!each) run(["hyprctl", "eval", "omarchy_displays.match_all()"])
+    root.perDisplay = each
+    run(["hyprctl", "eval", "omarchy_displays.set_scale_mode(\"" + (each ? "each" : "linked") + "\")"])
   }
 
   function setMain(name) {
@@ -368,10 +365,9 @@ Panel {
     if (command) run(command)
   }
 
-  // by_hand tunes the display on its own (the Per display rows).
-  function setScale(scale, name, byHand) {
+  function setScale(scale, name) {
     if (arranged) {
-      run(["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + (byHand ? ", true" : "") + ")"])
+      run(["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + ")"])
     } else {
       run(["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale])
     }
@@ -433,8 +429,6 @@ Panel {
         selectedIndex = focusSection === "scale" ? 0 : -1
       }
       cursorActive = false
-    } else {
-      perDisplayChosen = false
     }
   }
 
@@ -511,8 +505,7 @@ Panel {
         var fields = String(text || "").trim().split(" ")
         var known = Hyprland.monitors.values.some(function(m) { return m.name === fields[0] })
         root.mainName = known ? fields[0] : ""
-        root.tunedByHand = fields[1] === "each"
-        if (root.tunedByHand) root.perDisplayChosen = false
+        root.perDisplay = fields[1] === "each"
       }
     }
   }
@@ -1059,7 +1052,7 @@ Panel {
                     bordered: true
                     width: (displayScales.width - Style.space(24) - displayScales.spacing * displayScales.values.length) / displayScales.values.length
                     active: displayScales.active === index
-                    onClicked: root.setScale(modelData, displayScales.modelData.name, true)
+                    onClicked: root.setScale(modelData, displayScales.modelData.name)
                   }
                 }
               }
