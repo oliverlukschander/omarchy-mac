@@ -1013,17 +1013,21 @@ Panel {
                   width: parent.width
                   spacing: Style.spacing.xs
 
+                  // The number as big as in the display list below, and in
+                  // line with it: that list insets its rows and centres the
+                  // number in a column of its own.
                   Item {
                     id: badgeSlot
                     visible: scaleRow.modelData.number > 0
-                    width: Style.space(24)
+                    width: Style.space(28)
                     height: rowBadge.height
                     anchors.verticalCenter: parent.verticalCenter
 
                     DisplayBadge {
                       id: rowBadge
+                      x: Style.space(6) + (Style.space(22) - width) / 2
                       number: scaleRow.modelData.number
-                      size: Style.font.caption * 1.6
+                      size: Style.font.title * 1.4
                       color: root.bar.foreground
                       fontFamily: root.bar.fontFamily
                     }
