@@ -1,18 +1,22 @@
 import QtQuick
-import Quickshell.Io
 import Quickshell.Hyprland
 import qs.Commons
 import "Model.js" as Model
 
 // The displays drawn to scale, as the display module arranged them. Drag one
-// to rearrange: on release it snaps flush against its nearest neighbour and
-// the module moves it there and remembers it.
+// to rearrange: an outline shows where it lands, flush against the nearest
+// side of another display, and on release the panel has the module move it
+// there and remember it.
 Item {
   id: root
 
   property var bar
   property string mainName: ""
   property bool dragging: false
+  // Where the display being dragged would land, in logical pixels.
+  property var landing: null
+
+  signal moveRequested(string name, int x, int y)
 
   implicitHeight: Style.space(130)
 
@@ -50,26 +54,37 @@ Item {
   readonly property real originX: (width - bounds.w * zoom) / 2
   readonly property real originY: (height - bounds.h * zoom) / 2
 
-  function drop(index, viewX, viewY) {
+  function viewX(x) { return originX + (x - bounds.x) * zoom }
+  function viewY(y) { return originY + (y - bounds.y) * zoom }
+
+  // The logical rect display `index` lands on when dragged to atX, atY in
+  // the view.
+  function landingFor(index, atX, atY) {
     var moving = displays[index]
     var others = []
     for (var i = 0; i < displays.length; i++) {
       if (i !== index) others.push(displays[i])
     }
-    if (others.length === 0) return
+    if (others.length === 0) return null
     var spot = Model.snapPosition(others, {
-      x: Math.round((viewX - originX) / zoom + bounds.x),
-      y: Math.round((viewY - originY) / zoom + bounds.y),
+      x: Math.round((atX - originX) / zoom + bounds.x),
+      y: Math.round((atY - originY) / zoom + bounds.y),
       w: moving.w,
       h: moving.h
     })
-    moveProc.command = ["hyprctl", "eval", "omarchy_displays.move(\"" + moving.name + "\", " + spot.x + ", " + spot.y + ")"]
-    moveProc.running = true
+    return { x: spot.x, y: spot.y, w: moving.w, h: moving.h }
   }
 
-  Process {
-    id: moveProc
-    onRunningChanged: if (!running) Hyprland.refreshMonitors()
+  Rectangle {
+    visible: root.landing !== null
+    x: root.landing ? root.viewX(root.landing.x) : 0
+    y: root.landing ? root.viewY(root.landing.y) : 0
+    width: root.landing ? root.landing.w * root.zoom : 0
+    height: root.landing ? root.landing.h * root.zoom : 0
+    radius: Style.space(4)
+    color: Qt.alpha(Color.accent, 0.15)
+    border.width: 1
+    border.color: Color.accent
   }
 
   Repeater {
@@ -80,11 +95,17 @@ Item {
       required property var modelData
       required property int index
 
-      readonly property real homeX: root.originX + (modelData.x - root.bounds.x) * root.zoom
-      readonly property real homeY: root.originY + (modelData.y - root.bounds.y) * root.zoom
+      readonly property real homeX: root.viewX(modelData.x)
+      readonly property real homeY: root.viewY(modelData.y)
+
+      function goHome() {
+        tile.x = Qt.binding(function() { return tile.homeX })
+        tile.y = Qt.binding(function() { return tile.homeY })
+      }
 
       x: homeX
       y: homeY
+      z: handle.drag.active ? 1 : 0
       width: modelData.w * root.zoom
       height: modelData.h * root.zoom
       radius: Style.space(4)
@@ -111,12 +132,25 @@ Item {
         // moves the display, not the panel.
         preventStealing: true
         onPressed: root.dragging = true
-        onCanceled: root.dragging = false
+        onPositionChanged: if (drag.active) root.landing = root.landingFor(tile.index, tile.x, tile.y)
+        onCanceled: {
+          root.dragging = false
+          root.landing = null
+          tile.goHome()
+        }
         onReleased: {
           root.dragging = false
-          if (tile.x !== tile.homeX || tile.y !== tile.homeY) root.drop(tile.index, tile.x, tile.y)
-          tile.x = Qt.binding(function() { return tile.homeX })
-          tile.y = Qt.binding(function() { return tile.homeY })
+          root.landing = null
+          var spot = tile.x !== tile.homeX || tile.y !== tile.homeY ? root.landingFor(tile.index, tile.x, tile.y) : null
+          if (!spot || (spot.x === tile.modelData.x && spot.y === tile.modelData.y)) {
+            tile.goHome()
+            return
+          }
+          // It stays where it lands until the panel reads the new
+          // arrangement back, which rebuilds the tiles.
+          tile.x = root.viewX(spot.x)
+          tile.y = root.viewY(spot.y)
+          root.moveRequested(tile.modelData.name, spot.x, spot.y)
         }
       }
     }

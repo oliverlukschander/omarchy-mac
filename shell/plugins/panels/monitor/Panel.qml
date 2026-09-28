@@ -284,6 +284,11 @@ Panel {
     run(["hyprctl", "eval", "omarchy_displays.set_main(\"" + name + "\")"])
   }
 
+  // Where the arrangement dropped a display, in logical pixels.
+  function moveDisplay(name, x, y) {
+    run(["hyprctl", "eval", "omarchy_displays.move(\"" + name + "\", " + x + ", " + y + ")"])
+  }
+
   // Shows each display's number big on that display for a moment.
   function identify() {
     root.identifying = true
@@ -574,9 +579,22 @@ Panel {
       if (running) return
       var next = root.pendingAction
       root.pendingAction = null
-      if (next) root.run(next)
-      else root.refresh()
+      if (next) {
+        root.run(next)
+        return
+      }
+      root.refresh()
+      settleRefresh.restart()
     }
+  }
+
+  // Hyprland applies new monitor rules on its next frame, which can come after
+  // the first read, so the arrangement and scales are read again once they
+  // have landed.
+  Timer {
+    id: settleRefresh
+    interval: 300
+    onTriggered: root.refresh()
   }
 
   // Applies text size via the CLI, which rewrites the shell override file;
@@ -1091,6 +1109,7 @@ Panel {
               visible: root.arranged
               bar: root.bar
               mainName: root.mainName
+              onMoveRequested: function(name, x, y) { root.moveDisplay(name, x, y) }
             }
 
             Repeater {
