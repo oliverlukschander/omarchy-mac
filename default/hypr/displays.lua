@@ -106,6 +106,7 @@ local targets = {} -- connector -> where we put that display, while it's on
 local registered = {} -- selector -> the rule last registered for it
 local settling = false -- our rules are registered but maybe not applied yet
 local generation = 0
+local pointer_to -- where the pointer goes once our rules have landed
 local pinned = {} -- identities whose workspace rules are registered
 local choosing = 0
 local switched_off = read_runtime("off") -- selector -> connector, switched off in the panel
@@ -175,6 +176,15 @@ local function current()
     present[rect.key] = rect
   end
   return present
+end
+
+-- The key of the display in layout that holds point p.
+local function under(layout, p)
+  for key, r in pairs(layout) do
+    if p.x >= r.x and p.x < r.x + r.w and p.y >= r.y and p.y < r.y + r.h then
+      return key
+    end
+  end
 end
 
 local NEUTRAL = { position = "auto", scale = "auto", transform = 0 }
@@ -368,9 +378,28 @@ local function settle()
   hl.timer(function()
     if mine == generation then
       settling = false
+      pointer_to = nil
       check()
     end
   end, { timeout = SETTLE_MS, type = "oneshot" })
+end
+
+-- Hyprland keeps the pointer where it was in the layout, so on a display the
+-- module moves or resizes it would end up elsewhere on the screen, or in a
+-- gap and pushed off it. It goes back to the same spot of its display once
+-- the new rules have landed.
+local function follow_pointer(present)
+  pointer_to = nil
+  local cursor = hl.get_cursor_pos()
+  local old = current()
+  local key = cursor and under(old, cursor)
+  local was, now = key and old[key], key and present[key]
+  if now and (now.x ~= was.x or now.y ~= was.y or now.w ~= was.w or now.h ~= was.h) then
+    pointer_to = {
+      x = math.floor(now.x + (cursor.x - was.x) * now.w / was.w + 0.5),
+      y = math.floor(now.y + (cursor.y - was.y) * now.h / was.h + 0.5),
+    }
+  end
 end
 
 -- Make present the arrangement: mend it into one piece, remember it for this
@@ -378,6 +407,7 @@ end
 -- for it and for every display that's off.
 local function commit(present, made_by_user)
   present = model.connect(present, state.layouts)
+  follow_pointer(present)
   targets = {}
 
   -- Block 0 stays the panel's, even while clamshell keeps it off.
@@ -431,6 +461,8 @@ local function commit(present, made_by_user)
 
   if register(present) then
     settle()
+  else
+    pointer_to = nil
   end
 
   local main = model.main(present)
@@ -444,14 +476,44 @@ local function commit(present, made_by_user)
   end
 end
 
--- The displays that are on after some change size: from where we put them,
--- main stays and the others follow.
+-- The display that stays where it is while others change size: one whose
+-- size stays, the one under the pointer first, then main. So only the
+-- displays that change move, and those are modeset anyway; the others
+-- neither flicker nor have the pointer's spot slide away. With every size
+-- changing, the one under the pointer stays, else main.
+local function anchor_for(old, sizes)
+  local function kept(key)
+    return key ~= nil and old[key].w == sizes[key].w and old[key].h == sizes[key].h
+  end
+  local cursor = hl.get_cursor_pos()
+  local pointed = cursor and under(old, cursor)
+  local main = model.main(old)
+  if kept(pointed) then
+    return pointed
+  elseif kept(main) then
+    return main
+  end
+  local keys = {}
+  for key in pairs(old) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    if kept(key) then
+      return key
+    end
+  end
+  return pointed or main
+end
+
+-- The displays that are on after some change size, from where we put them:
+-- the anchor stays and the others follow.
 local function reflowed(live, sizes)
   local old = {}
   for key, m in pairs(live) do
     old[key] = targets[m.name] or m
   end
-  local new = model.reflow(old, sizes, state.layouts)
+  local new = model.reflow(old, sizes, state.layouts, anchor_for(old, sizes))
   local present = {}
   for key, m in pairs(live) do
     present[key] = model.moved(m, new[key].x, new[key].y)
@@ -550,6 +612,10 @@ function check()
 
   if settling then
     settling = resized or moved
+    if not settling and pointer_to then
+      hl.dispatch(hl.dsp.cursor.move(pointer_to))
+      pointer_to = nil
+    end
     return
   end
 

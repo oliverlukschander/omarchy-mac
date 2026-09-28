@@ -497,12 +497,13 @@ function M.connect(layout, layouts)
   return result
 end
 
--- Re-seat displays after some change size (a scale step, a rotation). Main
--- keeps its spot, and every other display keeps the side and alignment it had
--- against the neighbour that links it to main; connect() mends whatever ends
--- up overlapping or detached. sizes maps keys to their new { w, h }.
-function M.reflow(old, sizes, layouts)
-  local main = M.main(old)
+-- Re-seat displays after some change size (a scale step, a rotation). The
+-- anchor (main unless one is given) keeps its spot, and every other display
+-- keeps the side and alignment it had against the neighbour that links it to
+-- the anchor; connect() mends whatever ends up overlapping or detached. sizes
+-- maps keys to their new { w, h }.
+function M.reflow(old, sizes, layouts, anchor)
+  local main = anchor and old[anchor] and anchor or M.main(old)
   if not main then
     return {}
   end
