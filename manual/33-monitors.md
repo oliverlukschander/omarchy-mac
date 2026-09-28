@@ -4,7 +4,7 @@ Omarchy assumes you're running on a 2x-capable retina-class display by default. 
 
 Other displays are sized to match. When you connect one for the first time, Omarchy picks the scale that makes things look the same size as on your main display (the laptop's own screen, unless you choose another in the Monitor panel), from the size the display reports. A desk monitor starts out showing things a little larger than the laptop does, since it sits further away.
 
-To change the size, open the Monitor panel from the bar and pick a scale, or use `Super + /` to go higher and `Super + Alt + /` to go lower. With _Linked displays_ selected, every display keeps in proportion when you change one. Choose _Per display_ to set each on its own; Omarchy learns from how you set a desk monitor against the laptop. `Super + Ctrl + /` matches every display to the main one again. Scales are remembered per display.
+To change the size, open the Monitor panel from the bar and pick a scale in the row of the display you want to change (with several connected, each has its own row, numbered like the displays themselves), or use `Super + /` to go higher and `Super + Alt + /` to go lower on the display you're on. With _Linked displays_ selected, every display keeps in proportion when you change one. Choose _Per display_ to set each on its own: changing one leaves the others as they are, and Omarchy learns from how you set a desk monitor against the laptop. Your choice stays until you change it. `Super + Ctrl + /` matches every display to the main one again. Scales are remembered per display.
 
 GTK and X11 applications follow the main display's scale, rounded to the whole number GTK needs, and pick up a change when they're restarted (close all windows with `Ctrl + Alt + Del` if many are oversized).
 
@@ -26,7 +26,7 @@ When you're extending, closing the lid on the laptop will automatically turn off
 
 ### Arranging multiple screens
 
-Omarchy remembers where each screen goes, for every combination of screens you connect, and recognises a screen by its model and serial number, whichever port you plug it into. A screen you connect for the first time goes to the right of the main one, with the bottom edges lined up. To rearrange, open the Monitor panel and drag the screens where they sit on your desk; the star next to a screen makes it the main one, and _Identify_ shows each screen's number on it. The number is shown on a small monitor icon, at the start of each screen's bar and in the Monitor panel. Screens that are already on don't move when another one connects.
+Omarchy remembers where each screen goes, for every combination of screens you connect, and recognises a screen by its model and serial number, whichever port you plug it into. A screen you connect for the first time goes to the right of the main one, with the bottom edges lined up. To rearrange, open the Monitor panel and drag the screens where they sit on your desk. Drag a screen past the middle of another to put it on that side; an outline shows where it will go. Click a screen to see its number on it, or _Identify_ to see them all, and the star next to a screen makes it the main one. The number is shown on a small monitor icon, at the start of each screen's bar and in the Monitor panel. Screens that are already on don't move when another one connects.
 
 Each screen has its own workspaces. `Super + 1..0` and the bar on each screen are for that screen, the three-finger swipe stops at the last workspace in use, `Super + D` followed by a number moves the active window to that screen (numbered from the left), and `Super + Ctrl + Alt + Arrows` moves it to the screen in that direction. When a screen is disconnected, its windows come over to the main screen's active workspace, and they go back when it returns.
 
@@ -40,7 +40,7 @@ If you'd rather use your own setup for all of this, `omarchy-hyprland-toggle dis
 
 ### Controlling brightness
 
-Monitor brightness is controlled by the dedicated function keys for brightness up/down. If you hold down shift while pressing these, you'll go to maximum or minimum brightness. The keys control the display you're focused on, so external monitors that speak DDC/CI are adjusted the same way as the laptop screen.
+Monitor brightness is controlled by the dedicated function keys for brightness up/down. If you hold down shift while pressing these, you'll go to maximum or minimum brightness. The keys control the display you're focused on, so external monitors that speak DDC/CI are adjusted the same way as the laptop screen. The brightness slider in the Monitor panel is for the focused display too, or for the laptop screen when the focused display can't be dimmed.
 
 ### Apple Displays
 
