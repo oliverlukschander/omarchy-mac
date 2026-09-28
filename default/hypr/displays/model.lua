@@ -140,14 +140,9 @@ function M.step_scale(current, direction, width, height)
   return options[1]
 end
 
--- Scale follows main: a display gets the clean scale that shows things the
--- same size as main does, measured in logical pixels per inch. Between the
--- laptop panel and a desk monitor, which is viewed from further away, the
--- desk factor applies: the desk monitor's logical ppi over the panel's. It
--- starts where macOS does, things about 15% larger on the desk monitor, and
--- is learned from the user's own adjustments.
-M.DESK_FACTOR = 0.86
-M.FACTOR_MIN, M.FACTOR_MAX = 0.3, 3
+-- Scale by real size: a display gets the clean scale that shows things as
+-- many millimetres tall as another display shows them, from both displays'
+-- pixels per inch (the EDID's physical size and the mode).
 
 -- Pixels per inch from the EDID width. A size outside what real displays
 -- have (TVs and projectors often report 0 or nonsense) counts as unknown.
@@ -156,14 +151,6 @@ local function ppi(d)
   if value and value >= 50 and value <= 600 then
     return value
   end
-end
-
--- How much larger things are meant to look on d than on main.
-local function ratio(d, main, factor)
-  if M.is_internal(d.key) == M.is_internal(main.key) then
-    return 1
-  end
-  return M.is_internal(main.key) and factor or 1 / factor
 end
 
 -- The clean scale nearest to scale, in either direction.
@@ -179,37 +166,14 @@ function M.nearest_clean(scale, width, height)
   end
 end
 
--- The scale for display d that matches main, or nil without EDID sizes.
-function M.derived_scale(d, main, factor)
-  local dppi, mppi = ppi(d), ppi(main)
-  if not dppi or not mppi then
+-- The scale at which display d shows things the same real size as display
+-- ref does at ref.scale, or nil without EDID sizes.
+function M.derived_scale(d, ref)
+  local dppi, rppi = ppi(d), ppi(ref)
+  if not dppi or not rppi then
     return nil
   end
-  return M.nearest_clean(dppi * main.scale / (mppi * ratio(d, main, factor)), d.width, d.height)
-end
-
--- The main scale at which d would be derived at the scale it has, the
--- inverse of derived_scale; nil without EDID sizes.
-function M.main_scale_for(d, main, factor)
-  local dppi, mppi = ppi(d), ppi(main)
-  if not dppi or not mppi then
-    return nil
-  end
-  return M.nearest_clean(d.scale * mppi * ratio(d, main, factor) / dppi, main.width, main.height)
-end
-
--- The desk factor that d, just tuned by the user, implies against main, or
--- nil when they're the same kind of display or sizes are unknown.
-function M.desk_factor(d, main)
-  local dppi, mppi = ppi(d), ppi(main)
-  if not dppi or not mppi or M.is_internal(d.key) == M.is_internal(main.key) then
-    return nil
-  end
-  local measured = (dppi / d.scale) / (mppi / main.scale)
-  local factor = M.is_internal(main.key) and measured or 1 / measured
-  if factor > M.FACTOR_MIN and factor < M.FACTOR_MAX then
-    return factor
-  end
+  return M.nearest_clean(dppi * ref.scale / rppi, d.width, d.height)
 end
 
 local function overlaps(a, b)

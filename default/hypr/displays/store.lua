@@ -2,7 +2,6 @@
 --   displays: identity -> { selector, size = { w, h } in pixels, scale,
 --             transform, block (its workspaces are block * 10 + 1..10),
 --             connector (last seen on) }
---   factor:   the learned desk factor (see model.DESK_FACTOR)
 --   main:     the display the user chose as main
 --   scale_mode: "each" when every display keeps its own scale (Per display),
 --             absent while scales are linked to main
@@ -211,9 +210,6 @@ local function sanitize(data)
   local state = { version = 1, displays = {}, layouts = {} }
   if type(data) ~= "table" or data.version ~= 1 then
     return state
-  end
-  if type(data.factor) == "number" and data.factor > model.FACTOR_MIN and data.factor < model.FACTOR_MAX then
-    state.factor = data.factor
   end
   state.main = type(data.main) == "string" and data.main or nil
   state.scale_mode = data.scale_mode == "each" and "each" or nil
