@@ -677,7 +677,9 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(560))
+    // As tall as its content, which grows with every display, up to the
+    // screen's height.
+    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -697,14 +699,18 @@ Panel {
 
       ScrollView {
         id: scrollArea
+        // Only a screen too short for it scrolls, with the scroll bar beside
+        // the content rather than over it.
+        readonly property bool overflowing: panelColumn.implicitHeight > height
         anchors.fill: parent
         clip: true
+        rightPadding: overflowing ? ScrollBar.vertical.width + Style.space(4) : 0
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-        ScrollBar.vertical.policy: panelColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+        ScrollBar.vertical.policy: overflowing ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
         Binding {
           target: scrollArea.contentItem
           property: "interactive"
-          value: panelColumn.implicitHeight > scrollArea.height
+          value: scrollArea.overflowing
         }
 
         Column {
