@@ -63,20 +63,17 @@ eq(model.step_scale(2, 1, 3456, 2160), 3, "step up on the MacBook panel")
 eq(model.step_scale(1.6, -1, 2560, 1440), 1.25, "step down on a 1440p display")
 eq(model.step_scale(4, 1, 2560, 1440), 4, "step up stops at the top")
 
--- Scale follows main, from EDID sizes (Oliver's MacBook and BenQ).
+-- Scale by real size, from EDID sizes (Oliver's MacBook and BenQ).
 local panel = { key = "eDP-1", width = 3456, height = 2160, physical = 346, scale = 3 }
 local desk_benq = { key = "desc:" .. benq, width = 2560, height = 1440, physical = 600, scale = 1 }
-eq(model.derived_scale(desk_benq, panel, model.DESK_FACTOR), 1.6, "the BenQ matches the panel at 3 with the default desk factor")
-eq(model.derived_scale(desk_benq, panel, 1), 1.25, "without the desk factor it would be matched by ppi alone")
-eq(model.derived_scale({ key = "x", width = 1920, height = 1080, physical = 0 }, panel, 1), nil, "no EDID size, no derived scale")
+eq(model.derived_scale(desk_benq, panel), 1.25, "next to the panel at 3, the BenQ shows things as many millimetres tall at 1.25")
 desk_benq.scale = 1.25
-local factor = model.desk_factor(desk_benq, panel)
-assert(factor > 0.95 and factor < 1.05, "tuning the BenQ to 1.25 teaches a factor of about 1")
-eq(model.derived_scale(desk_benq, panel, factor), 1.25, "and the learned factor reproduces the tuned scale")
+eq(model.derived_scale(panel, desk_benq), 3, "and the match is the same the other way round")
+eq(model.derived_scale({ key = "x", width = 1920, height = 1080, physical = 0 }, panel), nil, "no EDID size, no derived scale")
 eq(model.nearest_clean(1.49, 2560, 1440), 1.6, "nearest clean scale in either direction")
 eq(model.step_scale(2.4, 1, 3456, 2160), 3, "a step up from a derived scale goes to the next preset")
 eq(model.step_scale(2.4, -1, 3456, 2160), 2, "and a step down to the one below")
-eq(model.derived_scale({ key = "tv", width = 1920, height = 1080, physical = 16 }, panel, 1), nil, "an impossible EDID size counts as unknown")
+eq(model.derived_scale({ key = "tv", width = 1920, height = 1080, physical = 16 }, panel), nil, "an impossible EDID size counts as unknown")
 
 -- Main and numbering.
 local desk = {
@@ -267,7 +264,8 @@ local kept = store.sanitize(store.decode(store.encode({
   version = 1, factor = 1.07, main = "desc:X", scale_mode = "each",
   displays = { ["desc:X"] = { selector = "desc:X", size = { 1, 1 }, scale = 1 } },
 })))
-assert(kept.factor == 1.07 and kept.main == "desc:X" and kept.scale_mode == "each", "factor, main and the scale mode are kept")
+assert(kept.main == "desc:X" and kept.scale_mode == "each", "main and the scale mode are kept")
+assert(kept.factor == nil, "a desk factor from an earlier version is dropped")
 assert(store.sanitize({ version = 1, scale_mode = "auto" }).scale_mode == nil, "an unknown scale mode is linked")
 assert(clean.displays["desc:ok"].scale == 2, "stored scales snap to k/120")
 assert(#clean.layouts == 1, "invalid layouts are dropped")
@@ -938,66 +936,70 @@ settle()
 eq(H.outputs["USB-2"].scale, 1.6, "with its EDID back, the BenQ keeps its scale")
 H.windows = {}
 
--- Scale: a display seen for the first time matches main. Linked, a change on
--- any display keeps them all in proportion. Per display, each keeps its own
--- scale, and one set against the panel teaches the desk factor. The mode is
--- remembered until it's changed; SUPER+CTRL+/ matches everything to main.
+-- Scale: a display seen for the first time shows things the same real size
+-- as main. Linked, a change on any display takes the others to the same real
+-- size, and it doesn't matter which one is changed. Per display, each keeps
+-- its own scale. The mode is remembered until it's changed; SUPER+CTRL+/
+-- matches everything to main.
 H.outputs["eDP-1"].physical = 346
 connect("USB-7", "SAM Odyssey G7 H4ZR", "H4ZR", 2560, 1440, 1, 597)
 settle()
-eq(H.outputs["USB-7"].scale, 1.6, "a new 27-inch 1440p matches the panel at 3")
+eq(H.outputs["USB-7"].scale, 1.25, "a new 27-inch 1440p shows things the size they are on the panel at 3")
 eq(omarchy_displays.scale_mode(), "linked", "scaling is linked until Per display is chosen")
 H.focused = "eDP-1"
 omarchy_displays.step_scale(-1)
 settle()
 eq(H.outputs["eDP-1"].scale, 2, "the panel steps down to 2")
-eq(H.outputs["USB-7"].scale, 1, "the Odyssey follows main down")
+eq(H.outputs["USB-7"].scale, 100 / 120, "the Odyssey follows it down, to 0.83")
 H.focused = "USB-7"
 omarchy_displays.step_scale(1)
 settle()
-eq(H.outputs["USB-7"].scale, 1.25, "SUPER+/ on the Odyssey takes it to 1.25")
-eq(H.outputs["eDP-1"].scale, 2.4, "linked, main moves to match it (2.4, the nearest clean scale)")
+eq(H.outputs["USB-7"].scale, 1, "SUPER+/ on the Odyssey takes it to 1")
+eq(H.outputs["eDP-1"].scale, 2.4, "linked, the panel follows it to the same real size (2.4, the nearest clean scale)")
+omarchy_displays.set_scale("eDP-1", 2.4)
+settle()
+eq(H.outputs["USB-7"].scale, 1, "setting the panel to that brings the same pair: it doesn't matter which display is set")
 omarchy_displays.set_scale("eDP-1", 2)
 settle()
-eq(H.outputs["USB-7"].scale, 1, "and back with main")
+eq(H.outputs["USB-7"].scale, 100 / 120, "and back with the panel")
 local sent = H.sent
 local preview = store.decode(omarchy_displays.linked_preview())
-eq(preview["USB-7"]["1.25"]["eDP-1"], 2.4, "the Monitor panel's preview has main at 2.4 for the Odyssey at 1.25, as SUPER+/ did")
+eq(preview["USB-7"]["1.25"]["eDP-1"], 3, "the Monitor panel's preview has the panel at 3 for the Odyssey at 1.25")
 eq(preview["USB-7"]["1.25"]["USB-7"], 1.25, "and the Odyssey itself at 1.25")
-eq(preview["eDP-1"]["3"]["USB-7"], 1.6, "and the Odyssey at 1.6 for the panel at 3")
+eq(preview["eDP-1"]["3"]["USB-7"], 1.25, "and the Odyssey at 1.25 for the panel at 3")
 eq(H.sent, sent, "a preview sends no rules")
 omarchy_displays.set_scale_mode("each")
 eq(next(store.decode(omarchy_displays.linked_preview())), nil, "per display, nothing else changes, so there's nothing to preview")
-omarchy_displays.set_scale("USB-7", 1.25)
+omarchy_displays.set_scale("USB-7", 1.6)
 settle()
-eq(H.outputs["USB-7"].scale, 1.25, "per display, the Odyssey is set on its own")
-eq(H.outputs["eDP-1"].scale, 2, "and main is left alone")
+eq(H.outputs["USB-7"].scale, 1.6, "per display, the Odyssey is set on its own")
+eq(H.outputs["eDP-1"].scale, 2, "and the panel is left alone")
 H.focused = "eDP-1"
 omarchy_displays.step_scale(1)
 settle()
-eq(H.outputs["eDP-1"].scale, 3, "the panel steps back up to 3")
-eq(H.outputs["USB-7"].scale, 1.25, "per display, the Odyssey keeps its scale when main changes")
+eq(H.outputs["eDP-1"].scale, 3, "the panel steps up to 3")
+eq(H.outputs["USB-7"].scale, 1.6, "per display, the Odyssey keeps its scale when main changes")
 load_config()
 settle()
 eq(omarchy_displays.scale_mode(), "each", "Per display is remembered")
-eq(H.outputs["USB-7"].scale, 1.25, "and a reload keeps each display's own scale, not one matched to main")
-omarchy_displays.set_scale("USB-7", 1.6)
+eq(H.outputs["USB-7"].scale, 1.6, "and a reload keeps each display's own scale, not the 1.25 that matches main")
+omarchy_displays.set_scale("USB-7", 2)
 settle()
 eq(H.outputs["eDP-1"].scale, 3, "per display, another display's scale leaves main alone")
 eq(omarchy_displays.main_name(), "eDP-1", "main is the panel")
 omarchy_displays.match_all()
 settle()
-eq(H.outputs["USB-7"].scale, 1.6, "match all keeps the proportion learned from tuning: 1.6 next to main at 3")
+eq(H.outputs["USB-7"].scale, 1.25, "match all takes the Odyssey to the same real size as main at 3")
 eq(omarchy_displays.scale_mode(), "each", "matching everything to main keeps Per display")
 omarchy_displays.set_scale_mode("linked")
 eq(omarchy_displays.scale_mode(), "linked", "Linked is chosen again")
 H.focused = "eDP-1"
 omarchy_displays.step_scale(1)
 settle()
-assert(H.outputs["USB-7"].scale > 1.6, "linked, the Odyssey follows main up again")
+eq(H.outputs["USB-7"].scale, 200 / 120, "linked, the Odyssey follows the panel up to 4, at 1.67")
 omarchy_displays.step_scale(-1)
 settle()
-eq(H.outputs["USB-7"].scale, 1.6, "and back down")
+eq(H.outputs["USB-7"].scale, 1.25, "and back down")
 disconnect("USB-7")
 settle()
 

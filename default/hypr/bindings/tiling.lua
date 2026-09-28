@@ -125,8 +125,8 @@ for index = 1, 5 do
 end
 
 -- Scaling goes through the display arrangement, so the display keeps its
--- place and its neighbours follow the new size. The main display sets the
--- size for the others.
+-- place and its neighbours follow the new size. With Linked displays, the
+-- others follow it to the same real size.
 o.bind("SUPER + SLASH", "Monitor scaling up", function()
   displays().step_scale(1)
 end)

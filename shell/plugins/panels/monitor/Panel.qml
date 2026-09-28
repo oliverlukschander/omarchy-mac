@@ -38,9 +38,9 @@ Panel {
   property string mainName: ""
   property string identifying: ""
   // With the display module and two or more displays on, scale is Linked
-  // displays (every display in proportion to main) or Per display (each
-  // keeps its own), as the module remembers it, and every display has its
-  // own scale row, whichever display this panel opened on.
+  // displays (every display showing things the same real size) or Per
+  // display (each keeps its own), as the module remembers it, and every
+  // display has its own scale row, whichever display this panel opened on.
   readonly property bool arranged: mainName !== "" && enabledDisplayCount > 1
   property bool perDisplay: false
   property var pendingAction: null
