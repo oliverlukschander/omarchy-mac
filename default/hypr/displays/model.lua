@@ -368,10 +368,31 @@ local function covers(positions, layout, key)
   return true, count == wanted
 end
 
+local attach_all
+
+-- A stored layout brought to the sizes the displays have now. current maps
+-- the keys to rects; each goes to its stored spot at the size it had there,
+-- shifted so anchor is where current has it, and is then seated at its size
+-- now on the side and alignment it had. So a display that comes back at
+-- another scale keeps its side instead of overlapping its neighbour. A spot
+-- stored without its size is taken at the size now.
+local function stored_at(positions, current, anchor)
+  local p0 = positions[anchor]
+  local dx, dy = current[anchor].x - p0[1], current[anchor].y - p0[2]
+  local old, sizes = {}, {}
+  for key, rect in pairs(current) do
+    local p = positions[key]
+    old[key] = M.moved(rect, p[1] + dx, p[2] + dy)
+    old[key].w, old[key].h = p[3] or rect.w, p[4] or rect.h
+    sizes[key] = { w = rect.w, h = rect.h }
+  end
+  return attach_all(old, sizes, anchor)
+end
+
 -- Where display `key` (w×h) lands if it connects while `layout` is on: its
 -- spot in the most recently used stored layout that holds it and everything
--- on, preferring one for exactly this set, shifted so main stays where it
--- is. A spot that overlaps a display that's on, or touches none, is skipped;
+-- on, preferring one for exactly this set, seated around main where it is.
+-- A spot that overlaps a display that's on, or touches none, is skipped;
 -- then the default spot. With nothing on, the most recent stored position is
 -- used as is.
 function M.place_joining(layout, key, w, h, layouts)
@@ -391,12 +412,12 @@ function M.place_joining(layout, key, w, h, layouts)
       local positions = stored.positions
       local holds, only = covers(positions, layout, key)
       if holds and only == exact then
-        local rect = {
-          x = positions[key][1] + layout[main].x - positions[main][1],
-          y = positions[key][2] + layout[main].y - positions[main][2],
-          w = w,
-          h = h,
-        }
+        local current = { [key] = { x = 0, y = 0, w = w, h = h } }
+        for other, rect in pairs(layout) do
+          current[other] = rect
+        end
+        local spot = stored_at(positions, current, main)[key]
+        local rect = { x = spot.x, y = spot.y, w = w, h = h }
         if fits(layout, rect) then
           return rect.x, rect.y
         end
@@ -408,18 +429,13 @@ function M.place_joining(layout, key, w, h, layouts)
 end
 
 -- The arrangement the user made for exactly this set of displays, if any,
--- shifted so display `anchor` stays where it is.
+-- around display `anchor` where it is, at the sizes the displays have now.
 function M.restore(layout, anchor, layouts)
   for _, stored in ipairs(layouts) do
     local positions = stored.positions
     local holds, only = covers(positions, layout)
     if holds and only then
-      local dx, dy = layout[anchor].x - positions[anchor][1], layout[anchor].y - positions[anchor][2]
-      local result = {}
-      for key, rect in pairs(layout) do
-        result[key] = M.moved(rect, positions[key][1] + dx, positions[key][2] + dy)
-      end
-      return result
+      return stored_at(positions, layout, anchor)
     end
   end
 end
@@ -473,7 +489,12 @@ function M.reflow(old, sizes, layouts, anchor)
   if not main then
     return {}
   end
+  return M.connect(attach_all(old, sizes, main), layouts)
+end
 
+-- The part of reflow() that seats every display by its relation to the
+-- anchor, before anything is mended.
+function attach_all(old, sizes, main)
   local function sized(key, x, y)
     local rect = M.moved(old[key], x or old[key].x, y or old[key].y)
     if sizes[key] then
@@ -501,7 +522,7 @@ function M.reflow(old, sizes, layouts, anchor)
   for key in pairs(old) do
     new[key] = new[key] or sized(key)
   end
-  return M.connect(new, layouts)
+  return new
 end
 
 local function signature(positions)
@@ -513,7 +534,7 @@ end
 function M.remember(layouts, layout, limit)
   local positions = {}
   for key, rect in pairs(layout) do
-    positions[key] = { rect.x, rect.y }
+    positions[key] = { rect.x, rect.y, rect.w, rect.h }
   end
 
   local sig = signature(positions)

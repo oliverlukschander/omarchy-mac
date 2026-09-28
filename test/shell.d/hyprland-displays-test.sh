@@ -132,6 +132,19 @@ local restored = model.restore({
 eq(restored.a.x, 6152, "restore shifts the stored arrangement onto the anchor")
 eq(model.restore({ ["eDP-1"] = { x = 0, y = 0, w = 1, h = 1 } }, "eDP-1", mru), nil, "no stored arrangement for this set")
 
+-- Back at another size, a display keeps the side and alignment it was stored
+-- with: the BenQ was left of the panel at 1600x900, bottoms flush, and now
+-- comes back at 2048x1152.
+local sized = { { positions = { ["eDP-1"] = { 0, 0, 1152, 720 }, ["desc:" .. benq] = { -1600, -180, 1600, 900 } } } }
+x, y = model.place_joining({ ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720 } }, "desc:" .. benq, 2048, 1152, sized)
+eq(x .. "," .. y, "-2048,-432", "a display joining at another size keeps its side, bottoms flush")
+restored = model.restore({
+  ["eDP-1"] = { x = 0, y = 0, w = 1152, h = 720 },
+  ["desc:" .. benq] = { x = 9000, y = 9000, w = 2048, h = 1152 },
+}, "eDP-1", sized)
+eq(restored["desc:" .. benq].x .. "," .. restored["desc:" .. benq].y, "-2048,-432", "and so does an arrangement restored at other sizes")
+eq(table.concat(model.remember({}, restored, 16)[1].positions["desc:" .. benq], ","), "-2048,-432,2048,1152", "a remembered spot keeps the display's size")
+
 -- Connect: the arrangement stays in one piece.
 local gap = model.connect({
   ["desc:" .. benq] = { x = -1600, y = -180, w = 1600, h = 900 },
@@ -1232,6 +1245,37 @@ settle()
 connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
 settle()
 eq(pos("USB-2") .. " " .. pos("USB-4"), middle .. " " .. right, "the middle display returns to the middle")
+
+-- A display that comes back at another scale keeps its side: the BenQ is
+-- put left of the laptop, unplugged, the laptop is rescaled, and the BenQ
+-- is plugged back in, matched to it at a new size.
+disconnect("USB-4")
+settle()
+H.outputs["eDP-1"].physical, H.outputs["USB-2"].physical = 346, 600
+local function beside()
+  local lap, b = H.outputs["eDP-1"], H.outputs["USB-2"]
+  local lw, lh = logical(lap)
+  local bw, bh = logical(b)
+  return (b.x + bw == lap.x and b.y + bh == lap.y + lh) and "left, bottoms flush" or (pos("USB-2") .. " beside " .. pos("eDP-1"))
+end
+local lw, lh = logical(H.outputs["eDP-1"])
+local bw, bh = logical(H.outputs["USB-2"])
+assert(omarchy_displays.move("USB-2", H.outputs["eDP-1"].x - bw, H.outputs["eDP-1"].y + lh - bh), "the BenQ goes left of the laptop")
+settle()
+eq(beside(), "left, bottoms flush", "the BenQ is left of the laptop")
+local before = H.outputs["USB-2"].scale
+disconnect("USB-2")
+settle()
+H.focused = "eDP-1"
+omarchy_displays.step_scale(1)
+settle()
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1, 600)
+settle()
+assert(H.outputs["USB-2"].scale ~= before, "the BenQ comes back at another scale, matched to the laptop")
+eq(beside(), "left, bottoms flush", "and still left of the laptop, bottoms flush")
+load_config()
+settle()
+eq(beside(), "left, bottoms flush", "and a reload keeps it there")
 
 print(omarchy_displays.status())
 print("flow ok")
