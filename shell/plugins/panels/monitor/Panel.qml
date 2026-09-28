@@ -358,9 +358,11 @@ Panel {
     return Model.normalizeScale(scale)
   }
 
-  // The preset a scale row highlights for its display's live scale.
+  // The preset a scale row highlights for its display's live scale. A row
+  // that comes through a Repeater's modelData has its values as a QML list,
+  // which closestScaleIndex doesn't take for an array.
   function activeScaleIndex(scales) {
-    return scales.width > 0 ? Model.closestScaleIndex(scales.values, liveScale(scales.name), scales.width, scales.height) : -1
+    return scales.width > 0 ? Model.closestScaleIndex(Array.from(scales.values), liveScale(scales.name), scales.width, scales.height) : -1
   }
 
   // What a preset comes to on the display of a scale row.
