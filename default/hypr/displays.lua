@@ -310,6 +310,36 @@ end
 -- What was moved is kept in a runtime file, so a reload in between doesn't
 -- lose it.
 
+-- Hyprland tells a window it has left a display only while that display is
+-- still there, and Chromium keeps laying a window out at the scale of a
+-- display it hasn't left, drawing it in a corner, until its next resize. So
+-- windows brought over from a display that's gone get a pixel more border
+-- once the removal has reached them, and their own back a moment later: a
+-- resize nobody sees, which has them draw at the scale of their new display.
+local function redraw(addresses)
+  if #addresses == 0 then
+    return
+  end
+  local wider = tostring((hl.get_config("general.border_size") or 0) + 1)
+  local function border(value)
+    local open = {}
+    for _, window in ipairs(hl.get_windows() or {}) do
+      open[window.address or ""] = true
+    end
+    for _, address in ipairs(addresses) do
+      if open[address] then
+        hl.dispatch(hl.dsp.window.set_prop({ window = "address:" .. address, prop = "border_size", value = value }))
+      end
+    end
+  end
+  hl.timer(function()
+    border(wider)
+    hl.timer(function()
+      border("unset")
+    end, { timeout = 100, type = "oneshot" })
+  end, { timeout = 300, type = "oneshot" })
+end
+
 local function rehome(present)
   local main = model.main(present)
   if not main then
@@ -329,7 +359,7 @@ local function rehome(present)
 
   local returns = read_runtime("returns")
 
-  local seen, changed, back_home = {}, false, {}
+  local seen, changed, back_home, brought = {}, false, {}, {}
   for _, window in ipairs(hl.get_windows() or {}) do
     local address, id = window.address, window.workspace and window.workspace.id
     local back = address and returns[address]
@@ -339,6 +369,7 @@ local function rehome(present)
       if not home[(id - 1) // 10] and main_workspace and id ~= main_workspace then
         returns[address] = { home = back and back.home or id, put = main_workspace }
         target = main_workspace
+        brought[#brought + 1] = address
       elseif back and id == back.put and home[(back.home - 1) // 10] then
         returns[address] = nil
         target = back.home
@@ -367,6 +398,7 @@ local function rehome(present)
   if changed then
     write_runtime("returns", returns)
   end
+  redraw(brought)
 end
 
 local check

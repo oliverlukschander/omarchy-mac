@@ -468,6 +468,9 @@ hl = {
   get_cursor_pos = function()
     return H.cursor
   end,
+  get_config = function(name)
+    return name == "general.border_size" and 2 or nil
+  end,
   on = function(event, fn)
     H.handlers[event] = H.handlers[event] or {}
     table.insert(H.handlers[event], fn)
@@ -528,6 +531,9 @@ hl = {
           H.windows[args.window:gsub("^address:", "")] = tonumber(args.workspace)
         end
         return { move = args }
+      end,
+      set_prop = function(args)
+        return { set_prop = args }
       end,
     },
     workspace = {
@@ -905,10 +911,21 @@ settle()
 -- The other displays' windows stay put.
 H.outputs["eDP-1"].active = 2
 H.windows = { lap = 1, a = 11, b = 13, dell = 41 }
+H.dispatched = {}
 disconnect("USB-2")
 settle()
 eq(H.windows.a .. " " .. H.windows.b, "2 2", "the BenQ's windows come over to the laptop's active workspace")
 eq(H.windows.lap .. " " .. H.windows.dell, "1 41", "the other displays' windows stay put")
+-- They're resized unseen once the removal has reached them, so an app that
+-- still lays them out at the BenQ's scale draws them at the laptop's.
+local borders = {}
+for _, action in ipairs(H.dispatched) do
+  if action.set_prop then
+    borders[#borders + 1] = action.set_prop.window .. "=" .. action.set_prop.value
+  end
+end
+table.sort(borders)
+eq(table.concat(borders, " "), "address:a=3 address:a=unset address:b=3 address:b=unset", "the windows brought over get a pixel more border and then their own back")
 H.windows.b = 3
 connect("USB-2", benq, "T4M01236019", 2560, 1440, 1)
 settle()
