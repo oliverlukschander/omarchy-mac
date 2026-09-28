@@ -454,6 +454,9 @@ hl = {
   get_active_monitor = function()
     return H.outputs[H.focused] and view(H.outputs[H.focused])
   end,
+  get_cursor_pos = function()
+    return H.cursor
+  end,
   on = function(event, fn)
     H.handlers[event] = H.handlers[event] or {}
     table.insert(H.handlers[event], fn)
@@ -499,6 +502,12 @@ hl = {
     focus = function(args)
       return { focus = args }
     end,
+    cursor = {
+      move = function(args)
+        H.cursor = { x = args.x, y = args.y }
+        return { cursor = args }
+      end,
+    },
     submap = function(name)
       return { submap = name }
     end,
@@ -648,13 +657,47 @@ settle()
 eq(moves("USB-2") + moves("eDP-1"), 0, "replug moves nothing")
 eq(H.toasts, 0, "replug raises no overlap toast")
 
--- SUPER+/ on the laptop: main keeps its spot, the BenQ follows its new size.
+-- SUPER+/ on the laptop: the BenQ keeps its size and so its spot, and the
+-- laptop, modeset anyway, moves to stay beside it with bottoms flush.
+H.moved = {}
 omarchy_displays.step_scale(1)
 settle()
 eq(H.outputs["eDP-1"].scale, 3, "laptop steps up to 3")
-eq(pos("eDP-1"), "0,0", "scaled main keeps its position")
-eq(pos("USB-2"), "-2560,-720", "neighbour stays left with bottoms flush")
+eq(pos("USB-2"), "-2560,-360", "the display that keeps its size keeps its position")
+eq(moves("USB-2"), 0, "and doesn't move at all")
+eq(pos("eDP-1"), "0,360", "the rescaled laptop stays right of it with bottoms flush")
 eq(H.toasts, 0, "scale step raises no overlap toast")
+-- Arranged for what follows: the laptop at the origin, bottoms flush.
+assert(omarchy_displays.move("eDP-1", 0, 0), "main can be dragged too")
+assert(omarchy_displays.move("USB-2", -2560, -720), "and the BenQ beside it")
+settle()
+eq(pos("eDP-1") .. " " .. pos("USB-2"), "0,0 -2560,-720", "arranged by hand")
+
+-- The pointer keeps its spot on its display. Over the BenQ while the laptop
+-- steps down, nothing under it moves; over the laptop while it steps up, it's
+-- put back on the same spot of the laptop once the rules have landed; and on
+-- a display dragged in the panel, it goes along.
+local function cursor()
+  return H.cursor.x .. "," .. H.cursor.y
+end
+H.cursor, H.moved, H.focused = { x = -1280, y = 0 }, {}, "eDP-1"
+omarchy_displays.step_scale(-1)
+settle()
+eq(pos("eDP-1"), "0,-360", "the laptop at 2 stays right of the BenQ, bottoms flush")
+eq(moves("USB-2"), 0, "the BenQ under the pointer doesn't move while the laptop rescales")
+eq(cursor(), "-1280,0", "and the pointer on it isn't moved")
+H.cursor = { x = 1296, y = 180 }
+omarchy_displays.step_scale(1)
+settle()
+eq(pos("eDP-1"), "0,0", "the laptop at 3 again")
+eq(cursor(), "864,360", "the pointer is still three quarters across and halfway down the laptop")
+H.cursor = { x = -1280, y = 0 }
+assert(omarchy_displays.move("USB-2", -2560, -360), "the BenQ is dragged down")
+settle()
+eq(cursor(), "-1280,360", "and the pointer on it goes along")
+assert(omarchy_displays.move("USB-2", -2560, -720), "and back up")
+settle()
+H.cursor = nil
 
 -- A tool outside the module rescales with a connector rule and position=auto
 -- (what the scaling script did before it delegated). The new scale is
