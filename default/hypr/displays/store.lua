@@ -9,7 +9,8 @@
 --   connectors: connector -> block of each display that's connected, for
 --             the bar
 --   layouts:  arrangements the user made, most recent first,
---             each { positions = { identity = { x, y } } }
+--             each { positions = { identity = { x, y, w, h } } }, the size
+--             in logical pixels the display had there
 -- It is read and written with io.open and never require()'d: Hyprland watches
 -- every required file and reloads the whole config when one changes.
 
@@ -205,6 +206,16 @@ local function point(p)
   end
 end
 
+-- A stored position, with the size the display had there if it's valid.
+local function spot(p)
+  local xy = point(p)
+  local w, h = xy and math.tointeger(p[3]), xy and math.tointeger(p[4])
+  if w and h and w > 0 and h > 0 then
+    xy[3], xy[4] = w, h
+  end
+  return xy
+end
+
 -- Keep only what this version can use, so nothing malformed reaches a rule.
 local function sanitize(data)
   local state = { version = 1, displays = {}, layouts = {} }
@@ -256,7 +267,7 @@ local function sanitize(data)
     local positions = {}
     local valid = type(layout) == "table" and type(layout.positions) == "table" and next(layout.positions) ~= nil
     for key, p in pairs(valid and layout.positions or {}) do
-      positions[key] = type(key) == "string" and lasting(key) and point(p) or nil
+      positions[key] = type(key) == "string" and lasting(key) and spot(p) or nil
       valid = valid and positions[key] ~= nil
     end
     if valid then
