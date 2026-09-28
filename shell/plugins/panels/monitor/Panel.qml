@@ -36,13 +36,12 @@ Panel {
   property string identifying: ""
   // With the display module and two or more displays on, scale is Linked
   // displays (every display in proportion to main) or Per display (each
-  // keeps its own), as the module remembers it. The scale row is always for
-  // the display this panel opened on.
+  // keeps its own), as the module remembers it, and every display has its
+  // own scale row, whichever display this panel opened on.
   readonly property bool arranged: mainName !== "" && enabledDisplayCount > 1
   property bool perDisplay: false
   property var pendingAction: null
   readonly property var panelMonitor: button.QsWindow.window ? Hyprland.monitorFor(button.QsWindow.window.screen) : null
-  readonly property string scaleTarget: arranged && panelMonitor ? panelMonitor.name : focusedMonitor
 
   // Carry sub-notch touchpad deltas between wheel events.
   property real wheelAccumulator: 0
@@ -51,17 +50,38 @@ Panel {
   //   "brightness" - single slider row, selectedIndex = -1 sentinel
   //                  (mirrors Audio's slider rows). Only present if a
   //                  controllable backlight was detected.
-  //   "scale"      - 6 Button scale presets; treated as a single
-  //                  horizontal row from j/k's perspective. h/l moves
-  //                  between presets, identical to bluetooth's header.
+  //   "scale<n>"   - one row of up to 6 Button scale presets per display
+  //                  (see scaleRows); each treated as a single horizontal
+  //                  row from j/k's perspective. h/l moves between presets,
+  //                  identical to bluetooth's header.
   //   "monitors"   - vertical display row list for enabling/disabling displays;
   //                  j/k walks each row.
   // Mouse hover on a target updates root state via the components' `hovered`
   // signal so keyboard cursor and pointer share one highlight.
   readonly property var scalePresets: ["1", "1.25", "1.6", "2", "3", "4"]
-  readonly property var scaleValues: {
-    var display = displayNamed(scaleTarget)
-    return display ? Model.availableScales(scalePresets, display.width, display.height) : scalePresets
+
+  // A scale row for every display, display 1 first, while the display module
+  // arranges them; otherwise one for the focused display.
+  readonly property var scaleRows: {
+    var names = arranged ? arrangement.displays.map(function(d) { return d.name }) : [focusedMonitor]
+    return names.map(function(name, index) {
+      var display = displayNamed(name)
+      return {
+        name: name,
+        number: arranged ? index + 1 : 0,
+        section: "scale" + index,
+        width: display ? display.width : 0,
+        height: display ? display.height : 0,
+        values: display ? Model.availableScales(scalePresets, display.width, display.height) : scalePresets
+      }
+    })
+  }
+
+  function scaleRow(section) {
+    for (var i = 0; i < scaleRows.length; i++) {
+      if (scaleRows[i].section === section) return scaleRows[i]
+    }
+    return null
   }
 
   // The display rows, in display order (display 1 first), those that are off
@@ -82,7 +102,7 @@ Panel {
     }
     return monitorScale
   }
-  property string focusSection: "scale"
+  property string focusSection: "scale0"
   property int selectedIndex: 0
   property bool cursorActive: false
 
@@ -108,7 +128,7 @@ Panel {
     var list = []
     if (brightnessAvailable) list.push("brightness")
     list.push("textsize")
-    if (!(arranged && perDisplay)) list.push("scale")
+    for (var i = 0; i < scaleRows.length; i++) list.push(scaleRows[i].section)
     if (displays.length > 1) list.push("monitors")
     return list
   }
@@ -116,14 +136,14 @@ Panel {
   function sectionCount(section) {
     if (section === "brightness") return 0  // only the slider sentinel at -1
     if (section === "textsize") return 0    // slider sentinel at -1, like brightness
-    if (section === "scale") return scaleValues.length
     if (section === "monitors") return rows.length
-    return 0
+    var scales = scaleRow(section)
+    return scales ? scales.values.length : 0
   }
 
   function sectionIsSingleRow(section) {
     // brightness and text size are lone sliders; scale presets sit horizontally.
-    return section === "brightness" || section === "textsize" || section === "scale"
+    return section === "brightness" || section === "textsize" || scaleRow(section) !== null
   }
 
   function sectionFirstIndex(section) {
@@ -161,14 +181,15 @@ Panel {
     }
   }
 
-  // h/l: in scale section, walks the preset row; everywhere else, no-op
+  // h/l: in a scale row, walks its presets; everywhere else, no-op
   // because adjustBrightness handles horizontal motion on the brightness
   // slider.
   function moveCursorH(delta) {
-    if (focusSection !== "scale") return
+    var scales = scaleRow(focusSection)
+    if (!scales) return
     var next = selectedIndex + delta
     if (next < 0) next = 0
-    if (next > scaleValues.length - 1) next = scaleValues.length - 1
+    if (next > scales.values.length - 1) next = scales.values.length - 1
     selectedIndex = next
   }
 
@@ -179,8 +200,9 @@ Panel {
   }
 
   function activateCursor() {
-    if (focusSection === "scale" && selectedIndex >= 0 && selectedIndex < scaleValues.length) {
-      setScale(scaleValues[selectedIndex])
+    var scales = scaleRow(focusSection)
+    if (scales && selectedIndex >= 0 && selectedIndex < scales.values.length) {
+      setScale(scales.values[selectedIndex], scales.name)
       return
     }
     if (focusSection === "monitors" && selectedIndex >= 0 && selectedIndex < rows.length) {
@@ -200,7 +222,7 @@ Panel {
     }
     var count = sectionCount(focusSection)
     if (sectionIsSingleRow(focusSection)) {
-      // brightness/text size use the -1 sentinel; scale clamps into the presets.
+      // brightness/text size use the -1 sentinel; a scale row clamps into its presets.
       if (focusSection === "brightness" || focusSection === "textsize") selectedIndex = -1
       else if (selectedIndex < 0 || selectedIndex >= count) selectedIndex = 0
       return
@@ -333,15 +355,14 @@ Panel {
     return Model.normalizeScale(scale)
   }
 
-  function activeScaleIndex() {
-    var display = displayNamed(scaleTarget)
-    return display ? Model.closestScaleIndex(scaleValues, liveScale(display.name), display.width, display.height) : -1
+  // The preset a scale row highlights for its display's live scale.
+  function activeScaleIndex(scales) {
+    return scales.width > 0 ? Model.closestScaleIndex(scales.values, liveScale(scales.name), scales.width, scales.height) : -1
   }
 
-  function effectiveScale(scale) {
-    var display = displayNamed(scaleTarget)
-    if (display) return Model.cleanScale(scale, display.width, display.height)
-    return normalizeScale(scale)
+  // What a preset comes to on the display of a scale row.
+  function effectiveScale(scales, scale) {
+    return scales.width > 0 ? Model.cleanScale(scale, scales.width, scales.height) : normalizeScale(scale)
   }
 
   // Playful mood-name for a given brightness percent. Bands intentionally
@@ -367,7 +388,7 @@ Panel {
 
   function setScale(scale, name) {
     if (arranged) {
-      run(["hyprctl", "eval", "omarchy_displays.set_scale(\"" + (name || scaleTarget) + "\", " + Number(scale) + ")"])
+      run(["hyprctl", "eval", "omarchy_displays.set_scale(\"" + name + "\", " + Number(scale) + ")"])
     } else {
       run(["bash", "-c", "omarchy-hyprland-monitor-scaling " + scale])
     }
@@ -425,8 +446,10 @@ Panel {
         focusSection = "brightness"
         selectedIndex = -1
       } else {
-        focusSection = visibleSections.indexOf("scale") >= 0 ? "scale" : "textsize"
-        selectedIndex = focusSection === "scale" ? 0 : -1
+        // The scale row of the display this panel opened on.
+        var own = scaleRows.filter(function(scales) { return panelMonitor && scales.name === panelMonitor.name })[0] || scaleRows[0]
+        focusSection = own ? own.section : "textsize"
+        selectedIndex = own ? 0 : -1
       }
       cursorActive = false
     }
@@ -434,7 +457,7 @@ Panel {
 
   onBrightnessAvailableChanged: clampCursor()
   onDisplaysChanged: clampCursor()
-  onScaleValuesChanged: clampCursor()
+  onScaleRowsChanged: clampCursor()
   onVisibleSectionsChanged: clampCursor()
 
   // Only poll while the panel is open; the bar glyph tracks monitor count via
@@ -659,7 +682,7 @@ Panel {
         else if (dx !== 0) {
           if (root.focusSection === "brightness") root.adjustBrightness(dx * 5)
           else if (root.focusSection === "textsize") root.adjustTextSize(dx)
-          else if (root.focusSection === "scale") root.moveCursorH(dx)
+          else if (root.scaleRow(root.focusSection)) root.moveCursorH(dx)
         }
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
@@ -899,37 +922,10 @@ Panel {
 
               PanelSectionHeader {
                 id: scaleHeader
-                readonly property var target: root.rows.filter(function(d) { return d.name === root.scaleTarget })[0]
-                // Linked, the row is for the display this panel opened on.
-                readonly property bool named: root.arranged && !root.perDisplay && target !== undefined
                 text: "SCALE"
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
                 anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
-              DisplayBadge {
-                id: scaleBadge
-                visible: scaleHeader.named
-                number: visible ? scaleHeader.target.number : 0
-                size: Style.font.caption * 1.6
-                color: scaleHeader.color
-                fontFamily: root.bar.fontFamily
-                anchors.left: scaleHeader.right
-                anchors.leftMargin: Style.space(4)
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
-              PanelSectionHeader {
-                visible: scaleHeader.named
-                text: visible ? Model.displayLabel(scaleHeader.target) : ""
-                width: parent.width - scaleModes.width - Style.space(8) - x
-                elide: Text.ElideRight
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                anchors.left: scaleBadge.right
-                anchors.leftMargin: Style.space(4)
                 anchors.verticalCenter: parent.verticalCenter
               }
 
@@ -976,83 +972,57 @@ Panel {
               }
             }
 
-            Grid {
-              id: scaleRow
-              visible: !root.perDisplay || !root.arranged
+            // A row per display, marked with its number while there's more
+            // than one.
+            Column {
               width: parent.width
-              columns: root.scaleValues.length
               spacing: Style.spacing.xs
 
-              readonly property real cellWidth: root.scaleValues.length > 0
-                ? (width - spacing * (columns - 1)) / columns
-                : 0
-
               Repeater {
-                model: root.scaleValues
+                model: root.scaleRows
 
-                ScalePill {
-                  required property string modelData
-                  required property int index
+                Row {
+                  id: scaleRow
+                  required property var modelData
 
-                  scaleValue: modelData
-                  scaleIndex: index
-                  width: scaleRow.cellWidth
-                }
-              }
-            }
-          }
+                  readonly property int active: root.activeScaleIndex(modelData)
+                  readonly property int count: modelData.values.length
+                  readonly property real pillWidth: count > 0
+                    ? (width - (modelData.number > 0 ? badgeSlot.width + spacing : 0) - spacing * (count - 1)) / count
+                    : 0
 
-          // Per display: a row of scales for each display, display 1 first.
-          Column {
-            visible: root.arranged && root.perDisplay
-            width: parent.width
-            spacing: Style.spacing.xs
+                  width: parent.width
+                  spacing: Style.spacing.xs
 
-            Repeater {
-              model: arrangement.displays
+                  Item {
+                    id: badgeSlot
+                    visible: scaleRow.modelData.number > 0
+                    width: Style.space(24)
+                    height: rowBadge.height
+                    anchors.verticalCenter: parent.verticalCenter
 
-              Row {
-                id: displayScales
-                required property var modelData
-                required property int index
-
-                readonly property var display: root.displayNamed(modelData.name)
-                readonly property var values: display ? Model.availableScales(root.scalePresets, display.width, display.height) : []
-                readonly property int active: display ? Model.closestScaleIndex(values, root.liveScale(modelData.name), display.width, display.height) : -1
-
-                width: parent.width
-                spacing: Style.spacing.xs
-
-                Item {
-                  width: Style.space(24)
-                  height: rowBadge.height
-                  anchors.verticalCenter: parent.verticalCenter
-
-                  DisplayBadge {
-                    id: rowBadge
-                    number: displayScales.index + 1
-                    size: Style.font.caption * 1.6
-                    color: root.bar.foreground
-                    fontFamily: root.bar.fontFamily
+                    DisplayBadge {
+                      id: rowBadge
+                      number: scaleRow.modelData.number
+                      size: Style.font.caption * 1.6
+                      color: root.bar.foreground
+                      fontFamily: root.bar.fontFamily
+                    }
                   }
-                }
 
-                Repeater {
-                  model: displayScales.values
+                  Repeater {
+                    model: scaleRow.modelData.values
 
-                  Button {
-                    required property string modelData
-                    required property int index
-                    text: displayScales.display ? Model.cleanScale(modelData, displayScales.display.width, displayScales.display.height) + "x" : ""
-                    fontSize: Style.font.caption
-                    foreground: root.bar.foreground
-                    fontFamily: root.bar.fontFamily
-                    horizontalPadding: Style.spacing.sm
-                    verticalPadding: Style.spacing.controlPaddingY
-                    bordered: true
-                    width: (displayScales.width - Style.space(24) - displayScales.spacing * displayScales.values.length) / displayScales.values.length
-                    active: displayScales.active === index
-                    onClicked: root.setScale(modelData, displayScales.modelData.name)
+                    ScalePill {
+                      required property string modelData
+                      required property int index
+
+                      scales: scaleRow.modelData
+                      scaleValue: modelData
+                      scaleIndex: index
+                      active: scaleRow.active === index
+                      width: scaleRow.pillWidth
+                    }
                   }
                 }
               }
@@ -1135,12 +1105,14 @@ Panel {
     }
   }
 
+  // A preset in the scale row `scales` (one of root.scaleRows).
   component ScalePill: Button {
     id: pill
+    required property var scales
     required property string scaleValue
     required property int scaleIndex
 
-    text: root.effectiveScale(scaleValue) + "x"
+    text: root.effectiveScale(scales, scaleValue) + "x"
     fontSize: Style.font.caption
     foreground: root.bar.foreground
     fontFamily: root.bar.fontFamily
@@ -1148,14 +1120,13 @@ Panel {
     verticalPadding: Style.spacing.controlPaddingY
     bordered: true
 
-    active: root.activeScaleIndex() === scaleIndex
-    hasCursor: root.cursorActive && root.focusSection === "scale" && root.selectedIndex === scaleIndex
+    hasCursor: root.cursorActive && root.focusSection === scales.section && root.selectedIndex === scaleIndex
 
-    onClicked: root.setScale(scaleValue)
+    onClicked: root.setScale(scaleValue, scales.name)
     onHovered: function(isHovered) {
       if (!isHovered || root.reflowingText) return
       root.cursorActive = true
-      root.focusSection = "scale"
+      root.focusSection = pill.scales.section
       root.selectedIndex = pill.scaleIndex
     }
   }
