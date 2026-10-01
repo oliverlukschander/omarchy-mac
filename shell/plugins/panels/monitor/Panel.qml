@@ -58,7 +58,8 @@ Panel {
   //                  row from j/k's perspective. h/l moves between presets,
   //                  identical to bluetooth's header.
   //   "monitors"   - vertical display row list for enabling/disabling displays;
-  //                  j/k walks each row.
+  //                  j/k walks each row. r opens the row's rotation menu,
+  //                  which takes j/k and Enter until it closes.
   // Mouse hover on a target updates root state via the components' `hovered`
   // signal so keyboard cursor and pointer share one highlight.
   readonly property var scalePresets: ["1", "1.25", "1.6", "2", "3", "4"]
@@ -116,9 +117,28 @@ Panel {
     }
     return monitorScale
   }
+
+  function liveTransform(name) {
+    var values = Hyprland.monitors.values
+    for (var i = 0; i < values.length; i++) {
+      if (values[i].name === name) return values[i].lastIpcObject ? values[i].lastIpcObject.transform || 0 : 0
+    }
+    return 0
+  }
+
+  // Every display that's on turns, while the display module arranges them.
+  function rotatable(display) {
+    return root.mainName !== "" && !!display && display.enabled
+  }
   property string focusSection: "scale0"
   property int selectedIndex: 0
   property bool cursorActive: false
+
+  // The display whose rotation menu is open ("" while none is), and the
+  // rotation under the pointer or keyboard cursor in it.
+  property string rotatingName: ""
+  property int rotationIndex: 0
+  readonly property bool rotationMenuOpen: rotatingName !== "" && rows.some(function(d) { return d.name === rotatingName && rotatable(d) })
 
   // Text size slider — curated macOS-style notches (px). The panel snaps to
   // these stops; the CLI (omarchy-display-text-size) accepts any integer in range.
@@ -214,6 +234,10 @@ Panel {
   }
 
   function activateCursor() {
+    if (rotationMenuOpen) {
+      setRotation(rotatingName, Model.rotationOptions()[rotationIndex].transform)
+      return
+    }
     var scales = scaleRow(focusSection)
     if (scales && selectedIndex >= 0 && selectedIndex < scales.values.length) {
       setScale(scales.values[selectedIndex], scales.name)
@@ -321,6 +345,23 @@ Panel {
   // Where the arrangement dropped a display, in logical pixels.
   function moveDisplay(name, x, y) {
     run(["hyprctl", "eval", "omarchy_displays.move(\"" + name + "\", " + x + ", " + y + ")"])
+  }
+
+  // Opens display `name`'s rotation menu at the rotation it has, or closes
+  // the menu when it's open.
+  function toggleRotationMenu(name) {
+    if (root.rotatingName === name) {
+      root.rotatingName = ""
+      return
+    }
+    root.rotationIndex = liveTransform(name) % 4
+    root.rotatingName = name
+  }
+
+  function setRotation(name, transform) {
+    root.rotatingName = ""
+    var command = Model.rotationCommand(name, transform)
+    if (command) run(command)
   }
 
   // Shows a display's number big on that display for a moment, or every
@@ -457,6 +498,7 @@ Panel {
   // with j/k ready to navigate. Keep a default landing point, but don't paint
   // the cursor until hover or the first navigation key.
   onOpenedChanged: {
+    rotatingName = ""
     if (opened) {
       refresh()
       if (brightnessAvailable) {
@@ -712,6 +754,11 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
+        // An open rotation menu takes j/k.
+        if (root.rotationMenuOpen) {
+          root.rotationIndex = Math.max(0, Math.min(3, root.rotationIndex + dy))
+          return
+        }
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy)
         else if (dx !== 0) {
@@ -720,8 +767,16 @@ Panel {
           else if (root.scaleRow(root.focusSection)) root.moveCursorH(dx)
         }
       }
-      onActivateRequested: if (root.cursorActive) root.activateCursor()
-      onCloseRequested: root.close()
+      onActivateRequested: if (root.cursorActive || root.rotationMenuOpen) root.activateCursor()
+      onCloseRequested: {
+        if (root.rotationMenuOpen) root.rotatingName = ""
+        else root.close()
+      }
+      // r opens the rotation menu of the display row under the cursor.
+      onTextKey: function(text) {
+        var display = root.focusSection === "monitors" ? root.rows[root.selectedIndex] : null
+        if (text === "r" && root.cursorActive && root.rotatable(display)) root.toggleRotationMenu(display.name)
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
       ScrollView {
@@ -1256,7 +1311,127 @@ Panel {
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
         width: parent.width - Style.space(22) - Style.space(14) - Style.space(16) - (root.arranged ? Style.space(24) : 0)
+          - (rotationChip.visible ? rotationChip.width + Style.space(8) : 0)
         anchors.verticalCenter: parent.verticalCenter
+      }
+
+      // The display's rotation; a click opens the four to choose from.
+      Text {
+        id: rotationChip
+        // The display's transform. Not `transform`, which every Item has.
+        readonly property int turn: root.liveTransform(monitorRow.display.name)
+        readonly property bool open: root.rotatingName === monitorRow.display.name
+
+        visible: root.rotatable(monitorRow.display)
+        onVisibleChanged: if (!visible && open) root.rotatingName = ""
+        textFormat: Text.PlainText
+        text: "󰑧" + (turn ? " " + Model.rotationLabel(turn) : "") + " 󰅀"
+        color: root.bar.foreground
+        // Quiet until the display is turned or its menu is open.
+        opacity: turn || open ? 1 : 0.55
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.body
+        width: Math.ceil(rotationWidest.advanceWidth)
+        horizontalAlignment: Text.AlignRight
+        elide: Text.ElideRight
+        anchors.verticalCenter: parent.verticalCenter
+
+        TextMetrics {
+          id: rotationWidest
+          font: rotationChip.font
+          text: "󰑧 270° 󰅀"
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.toggleRotationMenu(monitorRow.display.name)
+        }
+
+        Popup {
+          id: rotationMenu
+          readonly property real gap: Style.spacing.xxs
+
+          // Below the chip, or above it where the panel ends too soon.
+          x: rotationChip.width - width
+          y: {
+            var overlay = Overlay.overlay
+            if (!overlay || !visible) return rotationChip.height + gap
+            var top = rotationChip.mapToItem(overlay, 0, 0).y
+            return top + rotationChip.height + gap + height > overlay.height ? -height - gap : rotationChip.height + gap
+          }
+          width: Style.space(120)
+          padding: Style.spacing.hairline
+          // The chip toggles it; a press anywhere else closes it.
+          closePolicy: Popup.CloseOnPressOutsideParent
+          focus: false
+          onClosed: if (rotationChip.open) root.rotatingName = ""
+
+          Connections {
+            target: root
+            function onRotatingNameChanged() {
+              if (root.rotatingName === monitorRow.display.name) rotationMenu.open()
+              else rotationMenu.close()
+            }
+          }
+
+          background: BorderSurface {
+            color: Color.popups.background
+            borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+            radius: Style.cornerRadius
+          }
+
+          contentItem: Column {
+            spacing: Style.spacing.labelGap
+
+            Repeater {
+              model: Model.rotationOptions()
+
+              Rectangle {
+                id: rotationOption
+                required property var modelData
+                required property int index
+                readonly property bool highlighted: index === root.rotationIndex
+                readonly property color ink: highlighted ? Style.hoverStateColor(root.bar.foreground, Color.accent) : root.bar.foreground
+
+                width: rotationMenu.availableWidth
+                height: Style.spacing.popupRowHeight
+                radius: Style.cornerRadius
+                color: highlighted ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+
+                Text {
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.spacing.controlPaddingX
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: rotationOption.modelData.label
+                  color: rotationOption.ink
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                Text {
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.controlPaddingX
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: rotationOption.modelData.transform === rotationChip.turn ? "󰄬" : ""
+                  color: rotationOption.ink
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onEntered: root.rotationIndex = rotationOption.index
+                  onClicked: root.setRotation(monitorRow.display.name, rotationOption.modelData.transform)
+                }
+              }
+            }
+          }
+        }
       }
 
       Text {

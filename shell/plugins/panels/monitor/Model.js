@@ -217,6 +217,34 @@ function displayToggleCommand(name, enabled, managed) {
   return ["hyprctl", "eval", "hl.monitor(" + rule + ")"]
 }
 
+// The rotations the panel offers, as Hyprland counts transforms.
+function rotationOptions() {
+  return [
+    { transform: 0, label: "Standard" },
+    { transform: 1, label: "90°" },
+    { transform: 2, label: "180°" },
+    { transform: 3, label: "270°" }
+  ]
+}
+
+// What to call a display's transform. The flipped ones (4-7) only come from
+// a rule of the user's.
+function rotationLabel(transform) {
+  var t = Math.max(0, Math.min(7, Math.floor(Number(transform) || 0)))
+  var turn = rotationOptions()[t % 4].label
+  if (t < 4) return turn
+  return t === 4 ? "Flipped" : "Flipped " + turn
+}
+
+// The command that turns display `name` to `transform` through the display
+// module. The name is written into Lua, so only a plain connector passes.
+function rotationCommand(name, transform) {
+  if (!/^[A-Za-z0-9._-]+$/.test(String(name || ""))) return null
+  var t = Number(transform)
+  if (t !== 0 && t !== 1 && t !== 2 && t !== 3) return null
+  return ["hyprctl", "eval", "omarchy_displays.set_rotation(\"" + name + "\", " + t + ")"]
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clampBrightness: clampBrightness,
@@ -230,6 +258,9 @@ if (typeof module !== "undefined") {
     snapPosition: snapPosition,
     numberedDisplays: numberedDisplays,
     displayToggleCommand: displayToggleCommand,
-    displayLabel: displayLabel
+    displayLabel: displayLabel,
+    rotationOptions: rotationOptions,
+    rotationLabel: rotationLabel,
+    rotationCommand: rotationCommand
   }
 }
