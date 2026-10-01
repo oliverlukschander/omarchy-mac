@@ -158,4 +158,21 @@ assertDeepEqual(
 assertEqual(monitor.displayLabel({ name: 'eDP-1', model: '' }), 'Built-in display', 'monitor calls the internal panel the built-in display')
 assertEqual(monitor.displayLabel({ name: 'USB-2', model: 'BenQ LCD' }), 'BenQ LCD', 'monitor names an external display by its model')
 assertEqual(monitor.displayLabel({ name: 'DP-1', model: '' }), 'DP-1', 'monitor falls back to the connector')
+assertDeepEqual(
+  monitor.rotationOptions().map(function(r) { return r.transform + ' ' + r.label }),
+  ['0 Standard', '1 90°', '2 180°', '3 270°'],
+  'monitor offers the four rotations, as Hyprland counts them'
+)
+assertDeepEqual(
+  [0, 3, 4, 5, 9, undefined].map(monitor.rotationLabel),
+  ['Standard', '270°', 'Flipped', 'Flipped 90°', 'Flipped 270°', 'Standard'],
+  'monitor names every transform, the flipped ones too'
+)
+assertDeepEqual(
+  monitor.rotationCommand('USB-2', 1),
+  ['hyprctl', 'eval', 'omarchy_displays.set_rotation("USB-2", 1)'],
+  'monitor turns a display through the display module'
+)
+assertEqual(monitor.rotationCommand('USB-2', 5), null, 'monitor refuses a rotation it does not offer')
+assertEqual(monitor.rotationCommand('DP-1"}) os.exit()--', 1), null, 'monitor refuses an unsafe display name for rotation')
 JS
