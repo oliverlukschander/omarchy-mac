@@ -1277,8 +1277,61 @@ load_config()
 settle()
 eq(beside(), "left, bottoms flush", "and a reload keeps it there")
 
+-- A display turned in the panel keeps its side and its bottom edge, and the
+-- laptop beside it doesn't move. The turn is remembered for that display,
+-- through an unplug and a reload; a turn the panel doesn't offer is ignored.
+H.moved, H.focused = {}, "eDP-1"
+local laptop_at = pos("eDP-1")
+omarchy_displays.set_rotation("USB-2", 1)
+local first_rule
+for i = #H.rules, 1, -1 do
+  if H.rules[i].output == "desc:" .. benq then
+    first_rule = H.rules[i].position
+    break
+  end
+end
+settle()
+eq(H.outputs["USB-2"].transform, 1, "the BenQ is turned 90°")
+bw, bh = logical(H.outputs["USB-2"])
+assert(bh > bw, "and stands upright")
+eq(beside(), "left, bottoms flush", "still left of the laptop, bottoms flush")
+eq(first_rule, H.outputs["USB-2"].x .. "x" .. H.outputs["USB-2"].y, "the first rule sent already puts it there")
+eq(pos("eDP-1") .. " " .. moves("eDP-1"), laptop_at .. " 0", "the laptop doesn't move")
+eq(store.load().displays["desc:" .. benq].transform, 1, "the turn is remembered for the BenQ")
+assert(omarchy_displays.status():find("USB%-2%) [^\n]* transform 1"), "and shows in the status")
+local sent_before = H.sent
+omarchy_displays.set_rotation("USB-2", 1)
+omarchy_displays.set_rotation("USB-2", 5)
+omarchy_displays.set_rotation("USB-2", 1.5)
+omarchy_displays.set_rotation("USB-9", 3)
+settle()
+eq(H.sent, sent_before, "the same turn again, a flip, a fraction or an unknown display sends nothing")
+disconnect("USB-2")
+settle()
+connect("USB-2", benq, "T4M01236019", 2560, 1440, 1, 600)
+settle()
+eq(H.outputs["USB-2"].transform, 1, "the BenQ comes back turned")
+eq(beside(), "left, bottoms flush", "on its side")
+load_config()
+settle()
+eq(H.outputs["USB-2"].transform .. " " .. beside(), "1 left, bottoms flush", "and a reload keeps it so")
+
+-- The built-in display turns too. A half turn changes no size, so nothing
+-- moves; turned back, the BenQ is standard again beside the laptop.
+H.moved = {}
+omarchy_displays.set_rotation("eDP-1", 2)
+settle()
+eq(H.outputs["eDP-1"].transform, 2, "the built-in display turns too")
+eq(moves("eDP-1") + moves("USB-2"), 0, "a half turn moves nothing")
+omarchy_displays.set_rotation("eDP-1", 0)
+settle()
+omarchy_displays.set_rotation("USB-2", 0)
+settle()
+eq(H.outputs["eDP-1"].transform + H.outputs["USB-2"].transform, 0, "both back to standard")
+eq(beside(), "left, bottoms flush", "and the BenQ still left of the laptop, bottoms flush")
+
 print(omarchy_displays.status())
 print("flow ok")
 LUA
 ) || fail "display arrangement flow" "$flow_output"
-pass "display arrangement: first sight, place, replug, scale, outside changes, reload, boot, clamshell, mirror, ports, three displays, workspaces"
+pass "display arrangement: first sight, place, replug, scale, rotation, outside changes, reload, boot, clamshell, mirror, ports, three displays, workspaces"

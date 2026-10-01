@@ -3,8 +3,8 @@
 -- known display, including the ones that are off. A display that connects
 -- lands on its remembered spot in Hyprland's first pass, so nothing that is
 -- already on has to move. Positions change when the user moves a display,
--- when a scale step resizes one and its neighbours follow, or when a display
--- leaves and the others would no longer touch.
+-- when a scale step or a rotation resizes one and its neighbours follow, or
+-- when a display leaves and the others would no longer touch.
 --
 -- Each display also owns ten workspaces, which SUPER+1..0 reach on the
 -- display that has focus.
@@ -629,18 +629,19 @@ function check()
   end
 end
 
--- Apply new scales (key -> scale) to displays that are on. Each keeps its
--- place and the neighbours follow the new sizes.
-local function rescale(live, scales)
+-- Apply new scales and rotations (key -> scale, key -> transform) to
+-- displays that are on. Each keeps its place and the neighbours follow the
+-- new sizes.
+local function resize(live, scales, transforms)
   local sizes = {}
   for key, m in pairs(live) do
-    local scale = scales[key] or m.scale
     sizes[key] = {}
-    sizes[key].w, sizes[key].h = model.logical_size(m.width, m.height, scale, m.transform)
+    sizes[key].w, sizes[key].h = model.logical_size(m.width, m.height, scales[key] or m.scale, transforms[key] or m.transform)
   end
   local present = reflowed(live, sizes)
   for key, rect in pairs(present) do
-    rect.scale, rect.w, rect.h = scales[key] or rect.scale, sizes[key].w, sizes[key].h
+    rect.scale, rect.transform = scales[key] or rect.scale, transforms[key] or rect.transform
+    rect.w, rect.h = sizes[key].w, sizes[key].h
   end
   commit(present, true)
 end
@@ -673,7 +674,7 @@ function M.set_scale(name, scale)
   for key, m in pairs(live) do
     if m.name == name then
       local chosen = model.clean_scale(scale, m.width, m.height)
-      rescale(live, state.scale_mode == "each" and { [key] = chosen } or linked_for(live, key, chosen))
+      resize(live, state.scale_mode == "each" and { [key] = chosen } or linked_for(live, key, chosen), {})
       return
     end
   end
@@ -688,7 +689,7 @@ function M.match_all()
   local live = read_live()
   local main = model.main(live)
   if main then
-    rescale(live, linked_for(live, main, live[main].scale))
+    resize(live, linked_for(live, main, live[main].scale), {})
   end
 end
 
@@ -740,6 +741,24 @@ function M.step_scale(direction)
   for _, m in pairs(read_live()) do
     if m.name == name then
       M.set_scale(name, model.step_scale(m.scale, direction, m.width, m.height))
+      return
+    end
+  end
+end
+
+-- Turn the display on connector `name` to `transform`, as Hyprland counts
+-- them: 0 standard, 1 90°, 2 180°, 3 270°. Like a scale change, it keeps its
+-- place and the others stay where they are; the turn is remembered for that
+-- display. For the Monitor panel.
+function M.set_rotation(name, transform)
+  transform = type(transform) == "number" and math.tointeger(transform)
+  if inactive or not transform or transform < 0 or transform > 3 then
+    return
+  end
+  local live = read_live()
+  for key, m in pairs(live) do
+    if m.name == name then
+      resize(live, {}, { [key] = transform })
       return
     end
   end
@@ -870,7 +889,8 @@ function M.status()
   local lines = {}
   for index, key in ipairs(model.numbering(present)) do
     local r = present[key]
-    lines[#lines + 1] = string.format("D%d %s (%s) %dx%d at %d,%d scale %g%s", index, key, r.name, r.w, r.h, r.x, r.y, r.scale, key == main and " main" or "")
+    local turned = (r.transform or 0) ~= 0 and string.format(" transform %d", r.transform) or ""
+    lines[#lines + 1] = string.format("D%d %s (%s) %dx%d at %d,%d scale %g%s%s", index, key, r.name, r.w, r.h, r.x, r.y, r.scale, turned, key == main and " main" or "")
   end
   return table.concat(lines, "\n")
 end
