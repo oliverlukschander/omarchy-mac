@@ -25,11 +25,19 @@ if [[ -z $device ]]; then
   exit 1
 fi
 
+# A restore only undoes a blank. Every unlock and wake runs one, and
+# brightnessctl keeps its save, so an unpaired restore would bring back
+# whatever an old blank saved.
+blanked="${XDG_RUNTIME_DIR:-/tmp}/omarchy-brightness-keyboard-blanked"
+
 if [[ $direction == "off" ]]; then
-  brightnessctl -sd "$device" set 0 >/dev/null
+  brightnessctl -sd "$device" set 0 >/dev/null && touch "$blanked"
   exit 0
 elif [[ $direction == "restore" ]]; then
-  brightnessctl -rd "$device" >/dev/null
+  if [[ -e $blanked ]]; then
+    brightnessctl -rd "$device" >/dev/null
+    rm -f "$blanked"
+  fi
   exit 0
 fi
 
