@@ -341,6 +341,29 @@ tick
 (( $(led) == 43 && paused == 0 )) || fail "hibernate restore returns to the current room's level" "brightness=$(led) paused=$paused"
 pass "restoring an old level without a blank does not pause automatic brightness"
 
+# An idle wake can restore a saved lit level after the owner chose darkness.
+for choice in manual firmware; do
+  lux 26
+  last_set=""
+  paused=0
+  tick
+  keys off
+  keys restore
+  tick
+  if [[ $choice == "manual" ]]; then
+    for _ in {1..10}; do keys down; done
+  else
+    printf '0\n' >"$loop/leds/kbd_backlight/brightness"
+  fi
+  tick
+  (( $(led) == 0 && paused == 1 )) || fail "$choice off pauses automatic lighting"
+  keys restore
+  tick
+  (( $(led) == 0 && paused == 1 )) ||
+    fail "an idle wake preserves the $choice off choice" "brightness=$(led) paused=$paused"
+done
+pass "an idle wake preserves manually and firmware-disabled keyboard lighting"
+
 lux 400
 tick
 keys restore

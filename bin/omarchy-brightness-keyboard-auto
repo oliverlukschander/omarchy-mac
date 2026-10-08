@@ -237,7 +237,12 @@ tick() {
   current=$(brightnessctl -d "$device" get) || return 0
   if [[ -r $MANUAL_LEVEL_FILE && $(<"$MANUAL_LEVEL_FILE") == "restored "* ]]; then
     if [[ $(<"$MANUAL_LEVEL_FILE") == "restored $current" ]]; then
-      restored=1
+      if (( paused )); then
+        brightnessctl -d "$device" set "$last_set" >/dev/null || return 0
+        current=$last_set
+      else
+        restored=1
+      fi
     fi
     rm -f "$MANUAL_LEVEL_FILE"
   fi
