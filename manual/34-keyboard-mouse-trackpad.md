@@ -57,6 +57,10 @@ hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace" })
 
 On Dell XPS laptops with a haptic touchpad, you can also set the click strength to low, mid, or high under _Trigger > Hardware > Touchpad Haptics_.
 
+### Keyboard backlight
+
+Laptops with a keyboard backlight LED and an ambient light sensor light the keys in the dark and dim them as the room brightens. Dedicated keyboard-brightness keys still set the level by hand; automatic control resumes when the ambient light changes enough that the old choice no longer fits. Automatic control pauses while the screen is locked or the lid is closed. Keys turned off with the brightness keys or a firmware key (such as Fn + Space) stay off the same way; keys left off by the lock screen light up again with the room.
+
 ### Typing in Chinese, Japanese, and other languages
 
 Select Japanese, Korean, Chinese (Simplified, Pinyin), or Chinese (Traditional, Zhuyin) when the installer asks for your keyboard. Omarchy configures the keyboard and matching input engine automatically, including during offline first-boot setup. Japanese uses Mozc, Korean uses standard two-set Hangul, Simplified Chinese uses Pinyin, and Traditional Chinese uses Chewing's standard Zhuyin arrangement. Japanese (US keyboard) provides Mozc with a US keyboard layout.
