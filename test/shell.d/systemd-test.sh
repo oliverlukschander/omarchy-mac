@@ -112,3 +112,32 @@ pass "systemd-oomd acts on sustained memory stall"
 grep -Fx 'systemctl enable systemd-oomd.service' "$ROOT/install/config/enable-services.sh" >/dev/null ||
   fail "new installs ship the oomd drop-ins with the daemon that reads them disabled"
 pass "new installs enable systemd-oomd"
+
+# Existing users need the unit enabled even when an update has no user manager.
+migration_tmp=$(mktemp -d)
+trap 'rm -rf "$migration_tmp"' EXIT
+mkdir -p "$migration_tmp/bin" "$migration_tmp/home"
+cat >"$migration_tmp/bin/systemctl" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >>"$TEST_UNIT_CALLS"
+case $2 in
+  enable) [[ $TEST_USER_MANAGER == "live" ]] ;;
+  is-active) [[ $TEST_USER_MANAGER == "live" ]] ;;
+esac
+SH
+chmod +x "$migration_tmp/bin/systemctl"
+for manager in live absent; do
+  : >"$migration_tmp/calls"
+  PATH="$migration_tmp/bin:$PATH" HOME="$migration_tmp/home" TEST_UNIT_CALLS="$migration_tmp/calls" TEST_USER_MANAGER=$manager \
+    bash -euo pipefail "$ROOT/migrations/1791445738.sh" >/dev/null
+  if [[ $manager == "live" ]]; then
+    grep -qx -- '--user start omarchy-brightness-keyboard-auto.service' "$migration_tmp/calls" ||
+      fail "the keyboard migration starts the service in an existing graphical session"
+  else
+    wants="$migration_tmp/home/.config/systemd/user/graphical-session.target.wants/omarchy-brightness-keyboard-auto.service"
+    [[ $(readlink "$wants") == "/usr/lib/systemd/user/omarchy-brightness-keyboard-auto.service" ]] ||
+      fail "the keyboard migration enables the service without a user manager"
+    ! grep -q -- '--user start' "$migration_tmp/calls" || fail "the keyboard migration waits for a graphical login before starting"
+  fi
+done
+pass "the keyboard migration enables existing users with and without a graphical session"
