@@ -39,8 +39,14 @@ fi
 manual_file=$manual_dir/omarchy-brightness-keyboard-manual
 
 # One at a time, so a lock blank racing a wake can't leave the LED and the
-# record disagreeing.
-{ exec {lock_fd}>>"$manual_file.lock"; } 2>/dev/null && flock -w 2 "$lock_fd" 2>/dev/null
+# record disagreeing. The lock screen's blank and the wake's restore wait as
+# long as an automatic update holds the lock, which is never long; a key press
+# gives up after two seconds rather than lag.
+lock_wait=(-w 2)
+[[ $direction != "off" && $direction != "restore" ]] || lock_wait=()
+if { exec {lock_fd}>>"$manual_file.lock"; } 2>/dev/null; then
+  flock "${lock_wait[@]}" "$lock_fd" 2>/dev/null || exit 1
+fi
 
 if [[ $direction == "off" ]]; then
   # Keep an unconsumed restore across blanking unless firmware changed it.

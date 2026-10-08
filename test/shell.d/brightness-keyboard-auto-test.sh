@@ -155,10 +155,12 @@ esac
 SH
 cat >"$loop/bin/omarchy-hyprland-session-locked" <<'SH'
 #!/bin/bash
+[[ -z ${TEST_HUNG_SESSION:-} ]] || sleep 3
 [[ ${LOCKED:-0} == "1" ]]
 SH
 cat >"$loop/bin/omarchy-hw-laptop-closed" <<'SH'
 #!/bin/bash
+[[ -z ${TEST_SLOW_LID:-} ]] || sleep 2
 exit 1
 SH
 chmod +x "$loop/bin/"*
@@ -446,3 +448,62 @@ wait "$auto_pid"
 [[ -r $MANUAL_LEVEL_FILE && $(<"$MANUAL_LEVEL_FILE") == "$(led)" ]] ||
   fail "a brightness key keeps its chosen level and record together"
 pass "an in-flight auto tick cannot overwrite a brightness key and discard its record"
+
+# The lock screen's blank waits out an automatic update however long it holds
+# the lock, so the update can never light the keys after the blank.
+echo 0 >"$TEST_BARRIER/reads"
+rm -f "$TEST_BARRIER/checked" "$MANUAL_LEVEL_FILE"
+lux 26
+last_set=226
+paused=0
+printf '226\n' >"$loop/leds/kbd_backlight/brightness"
+TEST_PAUSE_AUTO=1 tick & auto_pid=$!
+for _ in {1..200}; do
+  [[ ! -e $TEST_BARRIER/checked ]] || break
+  sleep 0.01
+done
+[[ -e $TEST_BARRIER/checked ]] || fail "the auto tick reaches its update"
+keys off & off_pid=$!
+sleep 2.5
+kill -0 "$off_pid" 2>/dev/null || fail "the lock screen's blank waits for an update past two seconds"
+echo release >"$TEST_BARRIER/release"
+wait "$auto_pid"
+wait "$off_pid" || fail "the lock screen's blank succeeds after the update"
+(( $(led) == 0 )) || fail "the keys stay blank after an update that held the lock" "got $(led)"
+[[ $(<"$MANUAL_LEVEL_FILE") == "blank" ]] || fail "the blank keeps its record" "$(<"$MANUAL_LEVEL_FILE")"
+pass "the lock screen's blank waits out a slow automatic update and the keys stay off"
+
+TEST_SLOW_LID=1 tick & auto_pid=$!
+sleep 0.5
+flock -n "$MANUAL_LEVEL_FILE.lock" true || fail "a slow lid check does not hold the lock"
+wait "$auto_pid"
+pass "the lid check, which can wait on logind, runs before the lock is taken"
+
+printf '0\n' >"$loop/leds/kbd_backlight/brightness"
+echo blank >"$MANUAL_LEVEL_FILE"
+last_set=226
+paused=0
+TEST_HUNG_SESSION=1 tick
+(( $(led) == 0 )) || fail "a compositor that does not answer counts as locked" "got $(led)"
+pass "a session check that does not answer in a second leaves the keys alone"
+
+# A key that cannot get the lock in two seconds changes nothing, so a slow
+# automatic update and the key never write over each other.
+echo 0 >"$TEST_BARRIER/reads"
+rm -f "$TEST_BARRIER/checked" "$MANUAL_LEVEL_FILE"
+lux 26
+last_set=226
+paused=0
+printf '226\n' >"$loop/leds/kbd_backlight/brightness"
+TEST_PAUSE_AUTO=1 tick & auto_pid=$!
+for _ in {1..200}; do
+  [[ ! -e $TEST_BARRIER/checked ]] || break
+  sleep 0.01
+done
+[[ -e $TEST_BARRIER/checked ]] || fail "the auto tick reaches its update"
+if keys down; then fail "a key that cannot get the lock in time fails"; fi
+(( $(led) == 226 )) || fail "a key that gave up leaves the keys as they were" "got $(led)"
+[[ ! -e $MANUAL_LEVEL_FILE ]] || fail "a key that gave up records nothing"
+echo release >"$TEST_BARRIER/release"
+wait "$auto_pid"
+pass "a key that cannot get the lock in two seconds changes nothing"

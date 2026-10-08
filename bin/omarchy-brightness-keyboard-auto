@@ -154,8 +154,12 @@ last_set=""
 paused=0
 pause_lux=0
 
+# Asked while holding the lock the lock screen's blank waits for, so a
+# compositor that does not answer in time counts as locked.
 session_locked() {
-  omarchy-hyprland-session-locked >/dev/null 2>&1
+  local status=0
+  timeout -k 1 1 omarchy-hyprland-session-locked >/dev/null 2>&1 || status=$?
+  (( status == 0 || status == 124 || status == 137 ))
 }
 
 lid_closed() {
@@ -219,10 +223,14 @@ left_off() {
 tick() {
   local lux current delta threshold restored=0
 
-  flock -n 9 || return 0
   lux=$(read_lux) || return 0
+  # logind can take its whole timeout to answer, so ask before taking the lock.
+  if lid_closed; then
+    return 0
+  fi
 
-  if session_locked || lid_closed; then
+  flock -n 9 || return 0
+  if session_locked; then
     return 0
   fi
 
