@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // A small monitor screen with the display number drawn in it. Drawn from
 // rectangles rather than a font glyph, so the number lands in the middle of
@@ -10,7 +11,7 @@ Item {
   property int number: 0
   // Width of the monitor; the height follows.
   property real size: Style.font.title
-  property color color: Color.foreground
+  property color color: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
   readonly property int screenWidth: Math.max(8, Math.round(size))

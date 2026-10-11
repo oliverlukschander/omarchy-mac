@@ -899,11 +899,11 @@ if not inactive then
   M.own_workspaces = own_workspaces
   omarchy_displays = M
 
-  -- The three-finger swipe stops at a display's last workspace instead of
-  -- creating one outside its ten, like SUPER+TAB and the wheel, and steps only
-  -- through the display's own: stepping by number (the Mac's platform setting)
-  -- would run into the next display's. This loads after the platform's
-  -- settings and before the user's files, so a user's own setting still wins.
+  -- A three-finger workspace swipe stops at a display's last workspace
+  -- instead of creating one outside its ten, like SUPER+TAB and the wheel, and
+  -- steps only through the display's own: stepping by number would run into
+  -- the next display's. This loads before the user's files, so a user's own
+  -- setting still wins.
   if own_workspaces then
     hl.config({ gestures = { workspace_swipe_create_new = false, workspace_swipe_use_r = false } })
   end

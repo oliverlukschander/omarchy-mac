@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell.Hyprland
 import qs.Commons
+import qs.Commons as Commons
 import "Model.js" as Model
 
 // The displays drawn to scale, as the display module arranged them. Drag one
@@ -85,9 +86,9 @@ Item {
     width: root.landing ? root.landing.w * root.zoom : 0
     height: root.landing ? root.landing.h * root.zoom : 0
     radius: Style.space(4)
-    color: Qt.alpha(Color.accent, 0.15)
+    color: Qt.alpha(Commons.Color.accent, 0.15)
     border.width: 1
-    border.color: Color.accent
+    border.color: Commons.Color.accent
   }
 
   Repeater {
@@ -114,7 +115,7 @@ Item {
       radius: Style.space(4)
       color: Qt.alpha(root.bar.foreground, handle.drag.active || root.identified === modelData.name ? 0.22 : 0.12)
       border.width: 1
-      border.color: modelData.name === root.mainName ? Color.accent : Qt.alpha(root.bar.foreground, 0.5)
+      border.color: modelData.name === root.mainName ? Commons.Color.accent : Qt.alpha(root.bar.foreground, 0.5)
 
       Text {
         anchors.centerIn: parent

@@ -1377,8 +1377,8 @@ Panel {
           }
 
           background: BorderSurface {
-            color: Color.popups.background
-            borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+            color: Commons.Color.popups.background
+            borderSpec: Border.localOrSurfaceSpec("popups", "border", Commons.Color.popups.border, Commons.Color.popups.border, Style.normalBorderWidth)
             radius: Style.cornerRadius
           }
 
@@ -1393,12 +1393,12 @@ Panel {
                 required property var modelData
                 required property int index
                 readonly property bool highlighted: index === root.rotationIndex
-                readonly property color ink: highlighted ? Style.hoverStateColor(root.bar.foreground, Color.accent) : root.bar.foreground
+                readonly property color ink: highlighted ? Style.hoverStateColor(root.bar.foreground, Commons.Color.accent) : root.bar.foreground
 
                 width: rotationMenu.availableWidth
                 height: Style.spacing.popupRowHeight
                 radius: Style.cornerRadius
-                color: highlighted ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+                color: highlighted ? Style.hoverFillFor(root.bar.foreground, Commons.Color.accent) : "transparent"
 
                 Text {
                   anchors.left: parent.left
