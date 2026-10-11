@@ -441,8 +441,26 @@ Panel {
     if (!name) return
     if (enabled && root.enabledDisplayCount <= 1) return
 
-    var command = Model.displayToggleCommand(name, enabled, root.mainName !== "")
-    if (command) run(command)
+    // The built-in panel goes through its own command, which keeps the choice
+    // for reloads and clamshell.
+    if (/^(eDP|LVDS|DSI)-/.test(name)) {
+      run(["omarchy-hyprland-monitor-internal", enabled ? "off" : "on"])
+      return
+    }
+
+    // hyprctl keyword is rejected under the Lua config ("non-legacy parsers"),
+    // so drive the monitor through the hl.monitor eval API instead. While the
+    // display module arranges displays, it does that, keeping a display off
+    // through later rules and bringing it back where it was.
+    var output = '"' + name.replace(/[\\"]/g, "\\$&") + '"'
+    if (root.mainName !== "") {
+      run(["hyprctl", "eval", "omarchy_displays.set_enabled(" + output + ", " + !enabled + ")"])
+      return
+    }
+    var expr = enabled
+      ? 'hl.monitor({ output = ' + output + ', disabled = true })'
+      : 'hl.monitor({ output = ' + output + ', disabled = false, mode = "preferred", position = "auto", scale = "auto" })'
+    run(["hyprctl", "eval", expr])
   }
 
   function setScale(scale, name) {

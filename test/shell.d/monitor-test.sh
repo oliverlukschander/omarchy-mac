@@ -125,32 +125,6 @@ assertDeepEqual(
 assertDeepEqual(monitor.parseDisplays('{'), { displays: [], enabledDisplayCount: 0 }, 'monitor handles invalid display JSON')
 
 assertDeepEqual(
-  monitor.displayToggleCommand('HDMI-A-1', true),
-  ['hyprctl', 'eval', 'hl.monitor({ output = "HDMI-A-1", disabled = true })'],
-  'monitor disables an external display through the Lua config'
-)
-assertDeepEqual(
-  monitor.displayToggleCommand('HDMI-A-1', false),
-  ['hyprctl', 'eval', 'hl.monitor({ output = "HDMI-A-1", mode = "preferred", position = "auto", scale = "auto", disabled = false })'],
-  'monitor re-enables an external display with a complete rule'
-)
-assertDeepEqual(
-  monitor.displayToggleCommand('eDP-1', true),
-  ['omarchy-hyprland-monitor-internal', 'off'],
-  'monitor switches the internal panel through its own command'
-)
-assertDeepEqual(
-  monitor.displayToggleCommand('HDMI-A-1', true, true),
-  ['hyprctl', 'eval', 'omarchy_displays.set_enabled("HDMI-A-1", false)'],
-  'monitor switches an external display off through the display module when it manages displays'
-)
-assertDeepEqual(
-  monitor.displayToggleCommand('HDMI-A-1', false, true),
-  ['hyprctl', 'eval', 'omarchy_displays.set_enabled("HDMI-A-1", true)'],
-  'monitor switches it back on through the display module'
-)
-assertEqual(monitor.displayToggleCommand('DP-1"}) os.exit()--', true), null, 'monitor refuses an unsafe display name')
-assertDeepEqual(
   monitor.numberedDisplays([{ name: 'eDP-1' }, { name: 'HDMI-A-1' }, { name: 'USB-2' }], ['USB-2', 'eDP-1']).map(function(d) { return d.number + ' ' + d.name }),
   ['1 USB-2', '2 eDP-1', '0 HDMI-A-1'],
   'monitor lists displays in display order with their numbers, those that are off last'

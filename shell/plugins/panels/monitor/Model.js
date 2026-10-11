@@ -198,25 +198,6 @@ function numberedDisplays(displays, order) {
   return result.sort(function(a, b) { return (a.number || 1000) - (b.number || 1000) })
 }
 
-// The command that switches display `name` off, when enabled, or back on.
-// The internal panel goes through omarchy-hyprland-monitor-internal, which
-// persists the choice and which clamshell respects. An external goes through
-// the display module when it's managing displays (managed), which keeps it
-// off through later rule changes and brings it back where it was; otherwise
-// it gets a complete rule through hyprctl eval, as the Lua config refuses
-// `hyprctl keyword`. The name is written into Lua, so only a plain connector
-// passes.
-function displayToggleCommand(name, enabled, managed) {
-  if (!/^[A-Za-z0-9._-]+$/.test(String(name || ""))) return null
-  if (/^(eDP|LVDS|DSI)-/.test(name)) return ["omarchy-hyprland-monitor-internal", enabled ? "off" : "on"]
-  if (managed) return ["hyprctl", "eval", "omarchy_displays.set_enabled(\"" + name + "\", " + !enabled + ")"]
-
-  var rule = enabled
-    ? '{ output = "' + name + '", disabled = true }'
-    : '{ output = "' + name + '", mode = "preferred", position = "auto", scale = "auto", disabled = false }'
-  return ["hyprctl", "eval", "hl.monitor(" + rule + ")"]
-}
-
 // The rotations the panel offers, as Hyprland counts transforms.
 function rotationOptions() {
   return [
@@ -257,7 +238,6 @@ if (typeof module !== "undefined") {
     parseDisplays: parseDisplays,
     snapPosition: snapPosition,
     numberedDisplays: numberedDisplays,
-    displayToggleCommand: displayToggleCommand,
     displayLabel: displayLabel,
     rotationOptions: rotationOptions,
     rotationLabel: rotationLabel,
