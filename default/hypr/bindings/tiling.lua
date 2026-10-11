@@ -65,6 +65,11 @@ hl.define_submap("display", function()
   hl.bind("catchall", hl.dsp.submap("reset"), { ignore_mods = true })
 end)
 
+o.bind("SUPER + SHIFT + ALT + LEFT", "Move workspace to left monitor", hl.dsp.workspace.move({ monitor = "l" }))
+o.bind("SUPER + SHIFT + ALT + RIGHT", "Move workspace to right monitor", hl.dsp.workspace.move({ monitor = "r" }))
+o.bind("SUPER + SHIFT + ALT + UP", "Move workspace to up monitor", hl.dsp.workspace.move({ monitor = "u" }))
+o.bind("SUPER + SHIFT + ALT + DOWN", "Move workspace to down monitor", hl.dsp.workspace.move({ monitor = "d" }))
+
 o.bind("SUPER + CTRL + ALT + LEFT", "Move window to left monitor", hl.dsp.window.move({ monitor = "l" }))
 o.bind("SUPER + CTRL + ALT + RIGHT", "Move window to right monitor", hl.dsp.window.move({ monitor = "r" }))
 o.bind("SUPER + CTRL + ALT + UP", "Move window to up monitor", hl.dsp.window.move({ monitor = "u" }))
